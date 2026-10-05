@@ -1,10 +1,8 @@
-name: Deploy Static HTML
+name: Deploy Vite App to GitHub Pages
 
 on:
   push:
-    branches:
-      - main  # أو master حسب اسم الفرع الرئيسي لديك
-  workflow_dispatch:
+    branches: ['main'] # أو master حسب اسم الفرع لديك
 
 permissions:
   contents: read
@@ -12,8 +10,8 @@ permissions:
   id-token: write
 
 concurrency:
-  group: "pages"
-  cancel-in-progress: false
+  group: 'pages'
+  cancel-in-progress: true
 
 jobs:
   deploy:
@@ -22,16 +20,27 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout Repository
+      - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup Pages
-        uses: actions/configure-pages@v5
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
 
-      - name: Upload Artifact
+      - name: Install dependencies
+        run: npm install --force --no-audit || true
+
+      - name: Build
+        run: npx vite build
+
+      - name: Setup Pages
+        uses: actions/configure-pages@v4
+
+      - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
         with:
-          path: '.' # رفع الملفات مباشرة بدون حاجة لأوامر Node أو Build
+          path: './dist'
 
       - name: Deploy to GitHub Pages
         id: deployment
