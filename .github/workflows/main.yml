@@ -1,8 +1,9 @@
-name: Build & Deploy to GitHub Pages
+name: Deploy Static HTML
 
 on:
   push:
-    branches: [ "main", "master" ]
+    branches:
+      - main  # أو master حسب اسم الفرع الرئيسي لديك
   workflow_dispatch:
 
 permissions:
@@ -15,37 +16,22 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  build-and-deploy:
+  deploy:
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout Code
+      - name: Checkout Repository
         uses: actions/checkout@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 22
-
-      - name: Install Dependencies
-        run: npm install
-
-      - name: Type Check & Lint
-        run: npm run lint
-
-      - name: Build Web Application
-        run: npm run build
 
       - name: Setup Pages
         uses: actions/configure-pages@v5
 
-      - name: Upload Pages Artifact
+      - name: Upload Artifact
         uses: actions/upload-pages-artifact@v3
         with:
-          path: './dist'
+          path: '.' # رفع الملفات مباشرة بدون حاجة لأوامر Node أو Build
 
       - name: Deploy to GitHub Pages
         id: deployment
