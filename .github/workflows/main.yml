@@ -1,10 +1,9 @@
-name: Build & Test Application
+name: Deploy Static HTML
 
 on:
   push:
-    branches: [ "main", "master" ]
-  pull_request:
-    branches: [ "main", "master" ]
+    branches:
+      - main  # تأكد إن كان اسم فرعك main أو master
   workflow_dispatch:
 
 permissions:
@@ -13,36 +12,27 @@ permissions:
   id-token: write
 
 concurrency:
-  group: "ci-${{ github.ref }}"
-  cancel-in-progress: true
+  group: "pages"
+  cancel-in-progress: false
 
 jobs:
-  build:
+  deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout Code
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
+      - name: Setup Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload Artifact
+        uses: actions/upload-pages-artifact@v3
         with:
-          node-version: 22
+          path: '.' # يرفع جميع ملفات الموقع في المجلد الرئيسي
 
-      - name: Install Dependencies
-        run: npm install
-
-      - name: Type Check & Lint
-        run: npm run lint
-
-      - name: Build Web Application
-        run: npm run build
-
-      - name: Upload Build Artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: matchhub-build
-          path: |
-            dist/
-            MatchHub-Enterprise-Desktop-v5.html
-          retention-days: 14
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
