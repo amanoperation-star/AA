@@ -1,8 +1,9 @@
 import React from 'react';
-import { Settings, CheckCircle2, FileSpreadsheet } from 'lucide-react';
+import { Settings, CheckCircle2, FileSpreadsheet, X } from 'lucide-react';
 
 interface ProgressModalProps {
   isOpen: boolean;
+  onClose?: () => void;
   title?: string;
   fileName?: string;
   subtitle?: string;
@@ -14,6 +15,7 @@ interface ProgressModalProps {
 
 export const ProgressModal: React.FC<ProgressModalProps> = ({
   isOpen,
+  onClose,
   title = 'قراءة',
   fileName = 'نموذج_شيت_ربط_المناديب_والحسابات.csv',
   subtitle = 'جاري تحليل خلايا وسجلات ملف الإكسل...',
@@ -37,11 +39,20 @@ export const ProgressModal: React.FC<ProgressModalProps> = ({
 
         {/* 1. TOP HEADER SECTION */}
         <div className="flex items-start justify-between gap-4 mb-4">
-          {/* Top Left in RTL: Percentage Capsule Badge */}
-          <div className="order-2 sm:order-1 shrink-0">
+          {/* Top Left in RTL: Percentage Capsule Badge + Close Button */}
+          <div className="order-2 sm:order-1 shrink-0 flex items-center gap-2">
             <span className="px-3.5 py-1 rounded-full text-xs font-mono font-black bg-[#0d1c3a] text-blue-400 border border-blue-500/40 shadow-inner inline-block">
               {roundedPercent}%
             </span>
+            {onClose && (
+              <button
+                onClick={onClose}
+                className="w-8 h-8 rounded-xl bg-slate-800/80 hover:bg-slate-700 text-slate-400 hover:text-white flex items-center justify-center transition border border-slate-700/60 shrink-0 cursor-pointer shadow-sm"
+                title="إغلاق النافذة"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            )}
           </div>
 
           {/* Top Right in RTL: Spinning Gear Icon + Title + File Name + Subtitle */}

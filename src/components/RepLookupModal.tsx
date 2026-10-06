@@ -16,6 +16,7 @@ import {
   ArrowRightLeft,
   Sparkles,
   HelpCircle,
+  TableProperties,
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { MachineSummary, ExpandedRow, SheetRow } from '../types';
@@ -73,6 +74,7 @@ export const RepLookupModal: React.FC<RepLookupModalProps> = ({
   onFilterMainTable,
 }) => {
   const [activeTab, setActiveTab] = useState<'rep' | 'machine'>(initialMode);
+  const [lookupViewMode, setLookupViewMode] = useState<'cards' | 'table'>('table');
   const [searchQuery, setSearchQuery] = useState(initialRepQuery || '');
 
   // Reset or set search query when modal opens
@@ -324,6 +326,7 @@ export const RepLookupModal: React.FC<RepLookupModalProps> = ({
 
         const machinesList: Array<{
           machine: string;
+          type: 'payment' | 'cash';
           totalRepsOnMachine: number;
           repAccount: string;
           repName: string;
@@ -340,6 +343,7 @@ export const RepLookupModal: React.FC<RepLookupModalProps> = ({
 
             machinesList.push({
               machine: row.machine,
+              type: row.type || (row.machine.startsWith('7-') || row.machine.startsWith('٧-') ? 'cash' : 'payment'),
               totalRepsOnMachine: m.repCount,
               repAccount: row.account,
               repName: row.repName,
@@ -349,6 +353,8 @@ export const RepLookupModal: React.FC<RepLookupModalProps> = ({
           }
         });
 
+        const cashCount = machinesList.filter((m) => m.type === 'cash').length;
+        const paymentsCount = machinesList.filter((m) => m.type === 'payment').length;
         const soleCount = machinesList.filter((m) => m.totalRepsOnMachine === 1).length;
         const sharedCount = machinesList.filter((m) => m.totalRepsOnMachine > 1).length;
 
@@ -357,6 +363,8 @@ export const RepLookupModal: React.FC<RepLookupModalProps> = ({
             account: primaryAccount,
             name: primaryName,
             totalMachines: machinesList.length,
+            cashCount,
+            paymentsCount,
             soleCount,
             sharedCount,
           },
@@ -389,8 +397,11 @@ export const RepLookupModal: React.FC<RepLookupModalProps> = ({
           const currentIdx = allRepsOnThisMachine.findIndex((r) => r.account === primaryAccount && r.name === primaryName);
           const otherReps = allRepsOnThisMachine.filter((_, rIdx) => rIdx !== currentIdx);
 
+          const isCash = mId.startsWith('7-') || mId.startsWith('٧-') || matchedEntry?.type === 'cash';
+
           return {
             machine: mId,
+            type: isCash ? ('cash' as const) : ('payment' as const),
             totalRepsOnMachine,
             repAccount: primaryAccount,
             repName: primaryName,
@@ -399,6 +410,8 @@ export const RepLookupModal: React.FC<RepLookupModalProps> = ({
           };
         });
 
+        const cashCount = machinesList.filter((m) => m.type === 'cash').length;
+        const paymentsCount = machinesList.filter((m) => m.type === 'payment').length;
         const soleCount = machinesList.filter((m) => m.totalRepsOnMachine === 1).length;
         const sharedCount = machinesList.filter((m) => m.totalRepsOnMachine > 1).length;
 
@@ -407,6 +420,8 @@ export const RepLookupModal: React.FC<RepLookupModalProps> = ({
             account: primaryAccount,
             name: primaryName,
             totalMachines: machinesList.length,
+            cashCount,
+            paymentsCount,
             soleCount,
             sharedCount,
           },
@@ -822,19 +837,40 @@ export const RepLookupModal: React.FC<RepLookupModalProps> = ({
 
                     {/* KPI Pills */}
                     <div className="flex items-center gap-2 flex-wrap w-full md:w-auto justify-end">
-                      <div className="px-3.5 py-2 rounded-xl bg-[#050811] border border-slate-800 text-center min-w-[90px]">
+                      <div className="px-3.5 py-2 rounded-xl bg-[#050811] border border-slate-800 text-center min-w-[80px]">
                         <span className="text-[10px] text-slate-400 font-bold block">إجمالي الماكينات</span>
                         <span className="text-base font-mono font-black text-blue-400">
                           {matchedRepData.repInfo.totalMachines}
                         </span>
                       </div>
-                      <div className="px-3.5 py-2 rounded-xl bg-[#050811] border border-emerald-900/40 text-center min-w-[90px]">
+
+                      {/* Cash Machines Count Box */}
+                      <div className="px-3.5 py-2 rounded-xl bg-[#050811] border border-emerald-500/40 text-center min-w-[95px] shadow-sm">
+                        <span className="text-[10px] text-emerald-400 font-bold flex items-center justify-center gap-1">
+                          <span>💵 ماكينات الكاش</span>
+                        </span>
+                        <span className="text-base font-mono font-black text-emerald-400">
+                          {matchedRepData.repInfo.cashCount}
+                        </span>
+                      </div>
+
+                      {/* Payments Machines Count Box */}
+                      <div className="px-3.5 py-2 rounded-xl bg-[#050811] border border-blue-500/40 text-center min-w-[95px] shadow-sm">
+                        <span className="text-[10px] text-blue-400 font-bold flex items-center justify-center gap-1">
+                          <span>💳 ماكينات المدفوعات</span>
+                        </span>
+                        <span className="text-base font-mono font-black text-blue-400">
+                          {matchedRepData.repInfo.paymentsCount}
+                        </span>
+                      </div>
+
+                      <div className="px-3.5 py-2 rounded-xl bg-[#050811] border border-emerald-900/40 text-center min-w-[80px]">
                         <span className="text-[10px] text-emerald-400 font-bold block">منفردة (خاصة)</span>
                         <span className="text-base font-mono font-black text-emerald-400">
                           {matchedRepData.repInfo.soleCount}
                         </span>
                       </div>
-                      <div className="px-3.5 py-2 rounded-xl bg-[#050811] border border-amber-900/40 text-center min-w-[90px]">
+                      <div className="px-3.5 py-2 rounded-xl bg-[#050811] border border-amber-900/40 text-center min-w-[80px]">
                         <span className="text-[10px] text-amber-400 font-bold block">مشتركة (متعددة)</span>
                         <span className="text-base font-mono font-black text-amber-400">
                           {matchedRepData.repInfo.sharedCount}
@@ -844,9 +880,9 @@ export const RepLookupModal: React.FC<RepLookupModalProps> = ({
                   </div>
                 </div>
 
-                {/* Machines Cards for this Rep */}
+                {/* Machines Section for this Rep */}
                 <div className="space-y-3">
-                  <div className="p-3 bg-[#060a14] border border-slate-800 rounded-2xl flex items-center justify-between gap-3">
+                  <div className="p-3 bg-[#060a14] border border-slate-800 rounded-2xl flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                     <div className="flex items-center gap-2">
                       <Layers className="w-4 h-4 text-blue-400" />
                       <span className="text-xs font-bold text-white">
@@ -854,83 +890,192 @@ export const RepLookupModal: React.FC<RepLookupModalProps> = ({
                       </span>
                     </div>
 
-                    {/* Excel Export Button */}
-                    <button
-                      onClick={exportRepStatement}
-                      className="px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold flex items-center gap-1.5 transition cursor-pointer shadow-md"
-                    >
-                      <FileSpreadsheet className="w-3.5 h-3.5" />
-                      <span>تصدير بيان المندوب Excel</span>
-                    </button>
-                  </div>
-
-                  {/* Grid of Cards */}
-                  <div className="overflow-y-auto max-h-[45vh] pr-1">
-                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-                      {matchedRepData.machines.map((m, idx) => (
-                        <div
-                          key={`${m.machine}-${idx}`}
-                          className="bg-[#0b1222] border border-slate-800 rounded-2xl p-4 flex flex-col justify-between gap-3 shadow-md hover:border-blue-500/50 transition-all"
+                    <div className="flex items-center gap-2.5 flex-wrap">
+                      {/* View Switcher Capsule (Table vs Cards) */}
+                      <div className="inline-flex rounded-xl p-1 bg-[#050811] border border-slate-800 text-xs font-bold shrink-0">
+                        <button
+                          onClick={() => setLookupViewMode('cards')}
+                          className={`px-3 py-1 rounded-lg flex items-center gap-1.5 transition-all cursor-pointer ${
+                            lookupViewMode === 'cards'
+                              ? 'bg-blue-600 text-white shadow-sm'
+                              : 'text-slate-400 hover:text-white'
+                          }`}
+                          title="عرض البطاقات والبوكسات"
                         >
-                          {/* Card Header */}
-                          <div className="flex items-center justify-between border-b border-slate-800 pb-2">
-                            <div className="flex items-center gap-2">
-                              <span className="text-slate-500 font-mono text-[11px] font-bold">#{idx + 1}</span>
-                              <span className="font-mono font-black text-white text-sm tracking-wide">{m.machine}</span>
-                            </div>
-                            <span
-                              className={`px-2 py-0.5 rounded-lg text-[10px] font-black border ${
-                                m.totalRepsOnMachine === 1
-                                  ? 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30'
-                                  : 'bg-amber-500/15 text-amber-400 border-amber-500/30'
-                              }`}
-                            >
-                              {m.totalRepsOnMachine === 1 ? 'خاصة بالمندوب' : 'مشتركة'}
-                            </span>
-                          </div>
+                          <Layers className="w-3.5 h-3.5" />
+                          <span>عرض البطاقات</span>
+                        </button>
+                        <button
+                          onClick={() => setLookupViewMode('table')}
+                          className={`px-3 py-1 rounded-lg flex items-center gap-1.5 transition-all cursor-pointer ${
+                            lookupViewMode === 'table'
+                              ? 'bg-blue-600 text-white shadow-sm'
+                              : 'text-slate-400 hover:text-white'
+                          }`}
+                          title="عرض جدول البيانات التفصيلي"
+                        >
+                          <TableProperties className="w-3.5 h-3.5" />
+                          <span>عرض الجدول</span>
+                        </button>
+                      </div>
 
-                          {/* Card Content - Partners */}
-                          <div className="space-y-1.5">
-                            <span className="text-[10px] text-slate-400 font-bold block">
-                              {m.totalRepsOnMachine === 1 ? 'الملكية والشركاء:' : 'المناديب المشاركون:'}
-                            </span>
-                            {m.otherReps.length > 0 ? (
-                              <div className="flex items-center gap-1.5 flex-wrap">
-                                {m.otherReps.map((r, rIdx) => (
-                                  <span
-                                    key={rIdx}
-                                    onClick={() => setSearchQuery(r.account !== 'غير متوفر' ? r.account : r.name)}
-                                    className="px-2 py-0.5 rounded-lg bg-[#050811] hover:bg-slate-800 text-slate-300 border border-slate-800 hover:border-blue-500 text-[10px] hover:text-blue-400 cursor-pointer transition font-bold"
-                                    title="اضغط للاستعلام عن هذا المندوب"
-                                  >
-                                    {r.name} {r.account !== 'غير متوفر' ? `(${r.account})` : ''} {r.type === 'cash' ? '💵 كاش' : '💳 دفع'}
-                                  </span>
-                                ))}
-                              </div>
-                            ) : (
-                              <span className="text-slate-500 text-[11px]">المندوب هو المالك الوحيد ولا يوجد شركاء</span>
-                            )}
-                          </div>
-
-                          {/* Card Footer Actions */}
-                          <div className="pt-2 border-t border-slate-800 flex items-center justify-between">
-                            <span className="text-[10px] text-slate-500 font-mono font-bold">
-                              {m.totalRepsOnMachine === 1 ? '1 مندوب' : `${m.totalRepsOnMachine} مناديب`}
-                            </span>
-                            <button
-                              onClick={() => {
-                                setActiveTab('machine');
-                                setSearchQuery(m.machine);
-                              }}
-                              className="px-2.5 py-1 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-[10px] font-black transition cursor-pointer"
-                            >
-                              فحص الماكينة &larr;
-                            </button>
-                          </div>
-                        </div>
-                      ))}
+                      {/* Excel Export Button */}
+                      <button
+                        onClick={exportRepStatement}
+                        className="px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold flex items-center gap-1.5 transition cursor-pointer shadow-md"
+                      >
+                        <FileSpreadsheet className="w-3.5 h-3.5" />
+                        <span>تصدير بيان المندوب Excel</span>
+                      </button>
                     </div>
                   </div>
+
+                  {/* View Mode Rendering: TABLE VIEW or CARDS VIEW */}
+                  {lookupViewMode === 'table' ? (
+                    <div className="overflow-x-auto max-h-[45vh] border border-slate-800 rounded-2xl bg-[#0b1222] shadow-xl">
+                      <table className="w-full text-right text-xs border-collapse">
+                        <thead className="bg-[#050811] text-slate-400 font-bold sticky top-0 border-b border-slate-800 z-10">
+                          <tr>
+                            <th className="p-3 w-12 text-center font-mono">م</th>
+                            <th className="p-3 w-40 font-mono">رقم الماكينة</th>
+                            <th className="p-3 w-32 text-center">نوع الحساب</th>
+                            <th className="p-3 w-40 text-center">حالة الملكية والتعدد</th>
+                            <th className="p-3">المناديب المشاركون على الماكينة</th>
+                            <th className="p-3 w-28 text-center">إجراء</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-800/80 font-mono text-slate-200">
+                          {matchedRepData.machines.map((m, idx) => (
+                            <tr key={`${m.machine}-${idx}`} className="hover:bg-slate-800/50 transition-colors">
+                              <td className="p-3 text-center text-slate-500 font-bold">{idx + 1}</td>
+                              <td className="p-3 font-bold text-white text-sm tracking-wide">
+                                {m.machine}
+                              </td>
+                              <td className="p-3 text-center font-bold">
+                                {m.type === 'cash' ? (
+                                  <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-black bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+                                    💵 كاش
+                                  </span>
+                                ) : (
+                                  <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-black bg-blue-500/10 text-blue-400 border border-blue-500/20">
+                                    💳 مدفوعات
+                                  </span>
+                                )}
+                              </td>
+                              <td className="p-3 text-center">
+                                <span
+                                  className={`inline-block px-2 py-0.5 rounded-lg text-[10px] font-black border ${
+                                    m.totalRepsOnMachine === 1
+                                      ? 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30'
+                                      : 'bg-amber-500/15 text-amber-400 border-amber-500/30'
+                                  }`}
+                                >
+                                  {m.totalRepsOnMachine === 1 ? 'خاصة بالمندوب' : `مشتركة (${m.totalRepsOnMachine} مناديب)`}
+                                </span>
+                              </td>
+                              <td className="p-3 font-sans">
+                                {m.otherReps.length > 0 ? (
+                                  <div className="flex items-center gap-1.5 flex-wrap">
+                                    {m.otherReps.map((r, rIdx) => (
+                                      <span
+                                        key={rIdx}
+                                        onClick={() => setSearchQuery(r.account !== 'غير متوفر' ? r.account : r.name)}
+                                        className="px-2 py-0.5 rounded-lg bg-[#050811] hover:bg-slate-800 text-slate-300 border border-slate-800 hover:border-blue-500 text-[10px] hover:text-blue-400 cursor-pointer transition font-bold"
+                                        title="اضغط للاستعلام عن هذا المندوب"
+                                      >
+                                        {r.name} {r.account !== 'غير متوفر' ? `(${r.account})` : ''} {r.type === 'cash' ? '💵' : '💳'}
+                                      </span>
+                                    ))}
+                                  </div>
+                                ) : (
+                                  <span className="text-slate-500 text-[11px]">المندوب هو المالك الوحيد ولا يوجد شركاء</span>
+                                )}
+                              </td>
+                              <td className="p-3 text-center">
+                                <button
+                                  onClick={() => {
+                                    setActiveTab('machine');
+                                    setSearchQuery(m.machine);
+                                  }}
+                                  className="px-2.5 py-1 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-[10px] font-black transition cursor-pointer"
+                                >
+                                  فحص &larr;
+                                </button>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  ) : (
+                    /* Grid of Cards */
+                    <div className="overflow-y-auto max-h-[45vh] pr-1">
+                      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                        {matchedRepData.machines.map((m, idx) => (
+                          <div
+                            key={`${m.machine}-${idx}`}
+                            className="bg-[#0b1222] border border-slate-800 rounded-2xl p-4 flex flex-col justify-between gap-3 shadow-md hover:border-blue-500/50 transition-all"
+                          >
+                            {/* Card Header */}
+                            <div className="flex items-center justify-between border-b border-slate-800 pb-2">
+                              <div className="flex items-center gap-2">
+                                <span className="text-slate-500 font-mono text-[11px] font-bold">#{idx + 1}</span>
+                                <span className="font-mono font-black text-white text-sm tracking-wide">{m.machine}</span>
+                              </div>
+                              <span
+                                className={`px-2 py-0.5 rounded-lg text-[10px] font-black border ${
+                                  m.totalRepsOnMachine === 1
+                                    ? 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30'
+                                    : 'bg-amber-500/15 text-amber-400 border-amber-500/30'
+                                }`}
+                              >
+                                {m.totalRepsOnMachine === 1 ? 'خاصة بالمندوب' : 'مشتركة'}
+                              </span>
+                            </div>
+
+                            {/* Card Content - Partners */}
+                            <div className="space-y-1.5">
+                              <span className="text-[10px] text-slate-400 font-bold block">
+                                {m.totalRepsOnMachine === 1 ? 'الملكية والشركاء:' : 'المناديب المشاركون:'}
+                              </span>
+                              {m.otherReps.length > 0 ? (
+                                <div className="flex items-center gap-1.5 flex-wrap">
+                                  {m.otherReps.map((r, rIdx) => (
+                                    <span
+                                      key={rIdx}
+                                      onClick={() => setSearchQuery(r.account !== 'غير متوفر' ? r.account : r.name)}
+                                      className="px-2 py-0.5 rounded-lg bg-[#050811] hover:bg-slate-800 text-slate-300 border border-slate-800 hover:border-blue-500 text-[10px] hover:text-blue-400 cursor-pointer transition font-bold"
+                                      title="اضغط للاستعلام عن هذا المندوب"
+                                    >
+                                      {r.name} {r.account !== 'غير متوفر' ? `(${r.account})` : ''} {r.type === 'cash' ? '💵 كاش' : '💳 دفع'}
+                                    </span>
+                                  ))}
+                                </div>
+                              ) : (
+                                <span className="text-slate-500 text-[11px]">المندوب هو المالك الوحيد ولا يوجد شركاء</span>
+                              )}
+                            </div>
+
+                            {/* Card Footer Actions */}
+                            <div className="pt-2 border-t border-slate-800 flex items-center justify-between">
+                              <span className="text-[10px] text-slate-500 font-mono font-bold">
+                                {m.totalRepsOnMachine === 1 ? '1 مندوب' : `${m.totalRepsOnMachine} مناديب`}
+                              </span>
+                              <button
+                                onClick={() => {
+                                  setActiveTab('machine');
+                                  setSearchQuery(m.machine);
+                                }}
+                                className="px-2.5 py-1 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-[10px] font-black transition cursor-pointer"
+                              >
+                                فحص الماكينة &larr;
+                              </button>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
                 </div>
               </div>
             ) : (

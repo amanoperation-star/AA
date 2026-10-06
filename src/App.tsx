@@ -491,18 +491,47 @@ export default function App() {
   // Handle Sheet 1 upload
   const handleSheet1Upload = async (file: File) => {
     setIsSheet1Loading(true);
+    setProgressState({
+      isOpen: true,
+      title: 'قراءة',
+      fileName: file.name,
+      subtitle: 'جاري تحليل خلايا وسجلات ملف الإكسل...',
+      percent: 25,
+      stepText: 'تحويل ورقة العمل واستخراج بيانات الخلايا...',
+      countText: '',
+      isComplete: false,
+    });
 
     try {
       const data = await parseExcelFile(file);
       if (!data || data.length === 0) {
         setIsSheet1Loading(false);
+        setProgressState((p) => ({ ...p, isOpen: false }));
         showToast('⚠️ لم يتم العثور على أسطر بيانات صالحة في «' + file.name + '». يرجى التأكد من محتوى الملف.');
         return;
       }
 
+      setProgressState((p) => ({
+        ...p,
+        percent: 85,
+        stepText: 'استخراج أرقام الماكينات وتدقيق التكرارات...',
+      }));
+
       setSheet1(data);
       setSheet1FileName(file.name);
       setIsSheet1Loading(false);
+
+      setProgressState((p) => ({
+        ...p,
+        percent: 100,
+        stepText: `تم قراءة ${data.length.toLocaleString('ar-EG')} ماكينة بنجاح!`,
+        isComplete: true,
+      }));
+
+      setTimeout(() => {
+        setProgressState((p) => ({ ...p, isOpen: false }));
+      }, 500);
+
       showToast(`⚡ تم قراءة شيت الماكينات فوراً (${data.length.toLocaleString('ar-EG')} ماكينة).`);
 
       const canAutoRun = (sheet2.length > 0 || sheet3.length > 0) &&
@@ -510,11 +539,14 @@ export default function App() {
                          (sheet2.length === 0 || (colM2 && colRep)) &&
                          (sheet3.length === 0 || (colM3 && colCashRep));
       if (canAutoRun) {
-        executeReconciliation(data, sheet2, sheet3, colM1, colM2, colAcc, colRep, colM3, colCashAcc, colCashRep, emptyRepFallback);
+        setTimeout(() => {
+          executeReconciliation(data, sheet2, sheet3, colM1, colM2, colAcc, colRep, colM3, colCashAcc, colCashRep, emptyRepFallback);
+        }, 10);
       }
     } catch (err: any) {
       console.error(err);
       setIsSheet1Loading(false);
+      setProgressState((p) => ({ ...p, isOpen: false }));
       showToast(`❌ تعذر قراءة الملف: ${err?.message || 'يرجى التأكد من صيغة Excel أو CSV.'}`);
     }
   };
@@ -522,18 +554,47 @@ export default function App() {
   // Handle Sheet 2 upload (Payments Sheet)
   const handleSheet2Upload = async (file: File) => {
     setIsSheet2Loading(true);
+    setProgressState({
+      isOpen: true,
+      title: 'قراءة',
+      fileName: file.name,
+      subtitle: 'جاري تحليل خلايا وسجلات ملف الإكسل...',
+      percent: 25,
+      stepText: 'تحويل ورقة العمل واستخراج بيانات الخلايا...',
+      countText: '',
+      isComplete: false,
+    });
 
     try {
       const data = await parseExcelFile(file);
       if (!data || data.length === 0) {
         setIsSheet2Loading(false);
+        setProgressState((p) => ({ ...p, isOpen: false }));
         showToast('⚠️ لم يتم العثور على أسطر بيانات صالحة في شيت المدفوعات «' + file.name + '».');
         return;
       }
 
+      setProgressState((p) => ({
+        ...p,
+        percent: 85,
+        stepText: 'استخراج أرقام الحسابات وتدقيق سجلات المناديب...',
+      }));
+
       setSheet2(data);
       setSheet2FileName(file.name);
       setIsSheet2Loading(false);
+
+      setProgressState((p) => ({
+        ...p,
+        percent: 100,
+        stepText: `تم قراءة ${data.length.toLocaleString('ar-EG')} حساب بنجاح!`,
+        isComplete: true,
+      }));
+
+      setTimeout(() => {
+        setProgressState((p) => ({ ...p, isOpen: false }));
+      }, 500);
+
       showToast(`⚡ تم قراءة شيت المدفوعات فوراً (${data.length.toLocaleString('ar-EG')} سجل).`);
 
       const canAutoRun = sheet1.length > 0 &&
@@ -541,11 +602,14 @@ export default function App() {
                          (colM2 && colRep) &&
                          (sheet3.length === 0 || (colM3 && colCashRep));
       if (canAutoRun) {
-        executeReconciliation(sheet1, data, sheet3, colM1, colM2, colAcc, colRep, colM3, colCashAcc, colCashRep, emptyRepFallback);
+        setTimeout(() => {
+          executeReconciliation(sheet1, data, sheet3, colM1, colM2, colAcc, colRep, colM3, colCashAcc, colCashRep, emptyRepFallback);
+        }, 10);
       }
     } catch (err: any) {
       console.error(err);
       setIsSheet2Loading(false);
+      setProgressState((p) => ({ ...p, isOpen: false }));
       showToast(`❌ تعذر قراءة شيت المدفوعات: ${err?.message || 'يرجى التأكد من صيغة الملف.'}`);
     }
   };
@@ -553,18 +617,47 @@ export default function App() {
   // Handle Sheet 3 upload (Cash Sheet)
   const handleSheet3Upload = async (file: File) => {
     setIsSheet3Loading(true);
+    setProgressState({
+      isOpen: true,
+      title: 'قراءة',
+      fileName: file.name,
+      subtitle: 'جاري تحليل خلايا وسجلات ملف الإكسل...',
+      percent: 25,
+      stepText: 'تحويل ورقة العمل واستخراج بيانات الخلايا...',
+      countText: '',
+      isComplete: false,
+    });
 
     try {
       const data = await parseExcelFile(file);
       if (!data || data.length === 0) {
         setIsSheet3Loading(false);
+        setProgressState((p) => ({ ...p, isOpen: false }));
         showToast('⚠️ لم يتم العثور على أسطر بيانات صالحة في شيت الكاش «' + file.name + '».');
         return;
       }
 
+      setProgressState((p) => ({
+        ...p,
+        percent: 85,
+        stepText: 'استخراج أرقام ماكينات الكاش وتدقيق التكرارات...',
+      }));
+
       setSheet3(data);
       setSheet3FileName(file.name);
       setIsSheet3Loading(false);
+
+      setProgressState((p) => ({
+        ...p,
+        percent: 100,
+        stepText: `تم قراءة ${data.length.toLocaleString('ar-EG')} سجل كاش بنجاح!`,
+        isComplete: true,
+      }));
+
+      setTimeout(() => {
+        setProgressState((p) => ({ ...p, isOpen: false }));
+      }, 500);
+
       showToast(`⚡ تم قراءة شيت الكاش فوراً (${data.length.toLocaleString('ar-EG')} سجل).`);
 
       const canAutoRun = sheet1.length > 0 &&
@@ -572,11 +665,14 @@ export default function App() {
                          (sheet2.length === 0 || (colM2 && colRep)) &&
                          (colM3 && colCashRep);
       if (canAutoRun) {
-        executeReconciliation(sheet1, sheet2, data, colM1, colM2, colAcc, colRep, colM3, colCashAcc, colCashRep, emptyRepFallback);
+        setTimeout(() => {
+          executeReconciliation(sheet1, sheet2, data, colM1, colM2, colAcc, colRep, colM3, colCashAcc, colCashRep, emptyRepFallback);
+        }, 10);
       }
     } catch (err: any) {
       console.error(err);
       setIsSheet3Loading(false);
+      setProgressState((p) => ({ ...p, isOpen: false }));
       showToast(`❌ تعذر قراءة شيت الكاش: ${err?.message || 'يرجى التأكد من صيغة الملف.'}`);
     }
   };
@@ -993,6 +1089,7 @@ export default function App() {
       {/* Interactive Global Progress Modal matching image.png */}
       <ProgressModal
         isOpen={progressState.isOpen}
+        onClose={() => setProgressState((p) => ({ ...p, isOpen: false }))}
         title={progressState.title}
         fileName={progressState.fileName}
         subtitle={progressState.subtitle}
@@ -1278,12 +1375,13 @@ export default function App() {
                         onClick={() => {
                           setSheet1([]);
                           setSheet1FileName('');
-                          showToast('🗑️ تم إفراغ شيت الماكينات');
+                          showToast('🗑️ تم حذف وإغلاق شيت الماكينات المرفوع بنجاح');
                         }}
-                        className="px-2.5 py-1.5 rounded-lg text-xs font-semibold text-rose-400 hover:text-rose-300 bg-rose-500/10 hover:bg-rose-500/20 border border-rose-500/20 transition-all cursor-pointer"
-                        title="إفراغ الملف"
+                        className="px-3 py-1.5 rounded-lg text-xs font-bold text-rose-400 hover:text-white bg-rose-500/15 hover:bg-rose-600 border border-rose-500/30 transition-all cursor-pointer flex items-center gap-1.5 shadow-sm"
+                        title="إغلاق وحذف هذا الشيت في حالة رفعه بطريق الخطأ"
                       >
-                        إفراغ
+                        <X className="w-3.5 h-3.5" />
+                        <span>إغلاق / حذف الشيت</span>
                       </button>
                     )}
                     <label className={`px-4 py-2 rounded-lg text-xs font-bold transition-all cursor-pointer shadow-sm text-center ${
@@ -1337,12 +1435,13 @@ export default function App() {
                         onClick={() => {
                           setSheet2([]);
                           setSheet2FileName('');
-                          showToast('🗑️ تم إفراغ شيت المدفوعات');
+                          showToast('🗑️ تم حذف وإغلاق شيت المدفوعات المرفوع بنجاح');
                         }}
-                        className="px-2.5 py-1.5 rounded-lg text-xs font-semibold text-rose-400 hover:text-rose-300 bg-rose-500/10 hover:bg-rose-500/20 border border-rose-500/20 transition-all cursor-pointer"
-                        title="إفراغ الملف"
+                        className="px-3 py-1.5 rounded-lg text-xs font-bold text-rose-400 hover:text-white bg-rose-500/15 hover:bg-rose-600 border border-rose-500/30 transition-all cursor-pointer flex items-center gap-1.5 shadow-sm"
+                        title="إغلاق وحذف هذا الشيت في حالة رفعه بطريق الخطأ"
                       >
-                        إفراغ
+                        <X className="w-3.5 h-3.5" />
+                        <span>إغلاق / حذف الشيت</span>
                       </button>
                     )}
                     <label className={`px-4 py-2 rounded-lg text-xs font-bold transition-all cursor-pointer shadow-sm text-center ${
@@ -1396,12 +1495,13 @@ export default function App() {
                         onClick={() => {
                           setSheet3([]);
                           setSheet3FileName('');
-                          showToast('🗑️ تم إفراغ شيت الكاش');
+                          showToast('🗑️ تم حذف وإغلاق شيت الكاش المرفوع بنجاح');
                         }}
-                        className="px-2.5 py-1.5 rounded-lg text-xs font-semibold text-rose-400 hover:text-rose-300 bg-rose-500/10 hover:bg-rose-500/20 border border-rose-500/20 transition-all cursor-pointer"
-                        title="إفراغ الملف"
+                        className="px-3 py-1.5 rounded-lg text-xs font-bold text-rose-400 hover:text-white bg-rose-500/15 hover:bg-rose-600 border border-rose-500/30 transition-all cursor-pointer flex items-center gap-1.5 shadow-sm"
+                        title="إغلاق وحذف هذا الشيت في حالة رفعه بطريق الخطأ"
                       >
-                        إفراغ
+                        <X className="w-3.5 h-3.5" />
+                        <span>إغلاق / حذف الشيت</span>
                       </button>
                     )}
                     <label className={`px-4 py-2 rounded-lg text-xs font-bold transition-all cursor-pointer shadow-sm text-center ${
@@ -1934,11 +2034,65 @@ export default function App() {
                         <span>⚡ تحويل ماكينات الكاش لـ 7-</span>
                       </button>
                       <button
+                        onClick={() => {
+                          setSheet1([]);
+                          setSheet1FileName('');
+                          showToast('🗑️ تم حذف وإغلاق شيت الماكينات المرفوع بنجاح');
+                        }}
+                        className="px-2.5 py-1 bg-rose-500/20 hover:bg-rose-600 text-rose-300 hover:text-white rounded-lg text-xs font-bold transition cursor-pointer flex items-center gap-1 border border-rose-500/30 shadow-sm"
+                        title="إغلاق وحذف هذا الشيت في حالة رفعه بطريق الخطأ"
+                      >
+                        <X className="w-3.5 h-3.5" />
+                        <span>إغلاق الشيت (حذف)</span>
+                      </button>
+                      <button
                         onClick={() => setCurrentTab(2)}
-                        className="text-indigo-600 dark:text-indigo-400 hover:text-indigo-500 underline font-bold cursor-pointer transition text-xs"
+                        className="text-indigo-600 dark:text-indigo-400 hover:text-indigo-500 underline font-bold cursor-pointer transition text-xs mr-2"
                       >
                         الانتقال لرفع شيت المناديب &larr;
                       </button>
+                    </div>
+                  </div>
+
+                  {/* Stat Boxes for Cash & Payment Machines Count */}
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                    <div className="p-3.5 bg-slate-900/80 border border-emerald-500/40 rounded-2xl flex items-center justify-between shadow-sm">
+                      <div className="flex items-center gap-2.5">
+                        <div className="w-9 h-9 rounded-xl bg-emerald-500/20 text-emerald-400 flex items-center justify-center font-bold text-base">
+                          💵
+                        </div>
+                        <div>
+                          <span className="text-[11px] font-bold text-slate-400 block">ماكينات الكاش (7-)</span>
+                          <span className="text-xs text-emerald-400 font-semibold">مخصصة لحسابات الكاش</span>
+                        </div>
+                      </div>
+                      <span className="text-xl font-mono font-black text-emerald-400">{cashMachinesCount.toLocaleString('ar-EG')}</span>
+                    </div>
+
+                    <div className="p-3.5 bg-slate-900/80 border border-blue-500/40 rounded-2xl flex items-center justify-between shadow-sm">
+                      <div className="flex items-center gap-2.5">
+                        <div className="w-9 h-9 rounded-xl bg-blue-500/20 text-blue-400 flex items-center justify-center font-bold text-base">
+                          💳
+                        </div>
+                        <div>
+                          <span className="text-[11px] font-bold text-slate-400 block">ماكينات المدفوعات</span>
+                          <span className="text-xs text-blue-400 font-semibold">مخصصة لحسابات المدفوعات</span>
+                        </div>
+                      </div>
+                      <span className="text-xl font-mono font-black text-blue-400">{payMachinesCount.toLocaleString('ar-EG')}</span>
+                    </div>
+
+                    <div className="p-3.5 bg-slate-900/80 border border-indigo-500/40 rounded-2xl flex items-center justify-between shadow-sm">
+                      <div className="flex items-center gap-2.5">
+                        <div className="w-9 h-9 rounded-xl bg-indigo-500/20 text-indigo-400 flex items-center justify-center font-bold text-base">
+                          📦
+                        </div>
+                        <div>
+                          <span className="text-[11px] font-bold text-slate-400 block">إجمالي ماكينات الشيت</span>
+                          <span className="text-xs text-indigo-400 font-semibold">كافة الأجهزة المحملة</span>
+                        </div>
+                      </div>
+                      <span className="text-xl font-mono font-black text-indigo-400">{sheet1.length.toLocaleString('ar-EG')}</span>
                     </div>
                   </div>
 
@@ -2114,18 +2268,32 @@ export default function App() {
 
               {sheet2.length > 0 && (
                 <div className="mt-5 space-y-4 border-t border-slate-200 dark:border-slate-800/80 pt-5">
-                  <div className="p-3.5 rounded-2xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-600 dark:text-emerald-400 text-xs font-bold flex items-center justify-between">
+                  <div className="p-3.5 rounded-2xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-600 dark:text-emerald-400 text-xs font-bold flex flex-wrap items-center justify-between gap-3">
                     <div className="flex items-center gap-2">
                       <CheckCircle2 className="w-4 h-4 text-emerald-500 shrink-0" />
                       <span>تم قراءة شيت المدفوعات بنجاح: {sheet2.length.toLocaleString('ar-EG')} سجل توزيع</span>
                       {sheet2FileName && <span className="text-slate-400 font-normal">({sheet2FileName})</span>}
                     </div>
-                    <button
-                      onClick={() => setCurrentTab(3)}
-                      className="text-indigo-600 dark:text-indigo-400 underline font-bold cursor-pointer transition text-xs"
-                    >
-                      الانتقال لرفع شيت الكاش &larr;
-                    </button>
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={() => {
+                          setSheet2([]);
+                          setSheet2FileName('');
+                          showToast('🗑️ تم حذف وإغلاق شيت المدفوعات المرفوع بنجاح');
+                        }}
+                        className="px-2.5 py-1 bg-rose-500/20 hover:bg-rose-600 text-rose-300 hover:text-white rounded-lg text-xs font-bold transition cursor-pointer flex items-center gap-1 border border-rose-500/30 shadow-sm"
+                        title="إغلاق وحذف هذا الشيت في حالة رفعه بطريق الخطأ"
+                      >
+                        <X className="w-3.5 h-3.5" />
+                        <span>إغلاق الشيت (حذف)</span>
+                      </button>
+                      <button
+                        onClick={() => setCurrentTab(3)}
+                        className="text-indigo-600 dark:text-indigo-400 underline font-bold cursor-pointer transition text-xs mr-2"
+                      >
+                        الانتقال لرفع شيت الكاش &larr;
+                      </button>
+                    </div>
                   </div>
 
                   {/* Live Sheet 2 Preview Table */}
@@ -2228,7 +2396,7 @@ export default function App() {
                 <div className="mt-6 p-4 rounded-2xl bg-[#080d16]/60 border border-slate-850 space-y-4">
                   <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-emerald-500/10 border border-emerald-500/20 p-3.5 rounded-xl text-emerald-600 dark:text-emerald-400 text-xs font-bold">
                     <span>تم قراءة شيت الكاش بنجاح: {sheet3.length.toLocaleString('ar-EG')} سجل كاش</span>
-                    <div className="flex items-center gap-3">
+                    <div className="flex items-center gap-2">
                       <button
                         onClick={handleApplyCashPrefix}
                         className="px-3 py-1 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-[10px] font-black transition cursor-pointer"
@@ -2236,8 +2404,20 @@ export default function App() {
                         ⚡ تحويل لـ 7-
                       </button>
                       <button
+                        onClick={() => {
+                          setSheet3([]);
+                          setSheet3FileName('');
+                          showToast('🗑️ تم حذف وإغلاق شيت الكاش المرفوع بنجاح');
+                        }}
+                        className="px-2.5 py-1 bg-rose-500/20 hover:bg-rose-600 text-rose-300 hover:text-white rounded-lg text-xs font-bold transition cursor-pointer flex items-center gap-1 border border-rose-500/30 shadow-sm"
+                        title="إغلاق وحذف هذا الشيت في حالة رفعه بطريق الخطأ"
+                      >
+                        <X className="w-3.5 h-3.5" />
+                        <span>إغلاق الشيت (حذف)</span>
+                      </button>
+                      <button
                         onClick={() => setCurrentTab(4)}
-                        className="text-indigo-600 dark:text-indigo-400 hover:text-indigo-500 underline font-bold cursor-pointer transition"
+                        className="text-indigo-600 dark:text-indigo-400 hover:text-indigo-500 underline font-bold cursor-pointer transition text-xs mr-2"
                       >
                         الانتقال لتعيين الأعمدة &larr;
                       </button>

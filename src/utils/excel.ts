@@ -58,7 +58,7 @@ export async function parseExcelFile(file: File): Promise<SheetRow[]> {
   let workbook: XLSX.WorkBook | null = null;
 
   try {
-    workbook = XLSX.read(new Uint8Array(buffer), {
+    workbook = XLSX.read(buffer, {
       type: 'array',
       codepage: 65001,
       cellDates: false,
