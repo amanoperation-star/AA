@@ -41,6 +41,17 @@
         .cartoon-btn { border: 3px solid #0f172a; box-shadow: 4px 4px 0px #0f172a; transition: all 0.15s ease; }
         .cartoon-btn:hover { transform: translate(-2px, -2px); box-shadow: 6px 6px 0px #0f172a; }
         .cartoon-btn:active { transform: translate(2px, 2px); box-shadow: 2px 2px 0px #0f172a; }
+        @keyframes cardFadeInUp { from { opacity: 0; transform: translateY(16px) scale(0.98); } to { opacity: 1; transform: translateY(0) scale(1); } }
+        @keyframes stateSuccessPop { 0% { transform: scale(0.96); } 50% { transform: scale(1.025); } 100% { transform: scale(1); } }
+        @keyframes badgePop { 0% { transform: scale(0.75); opacity: 0.4; } 60% { transform: scale(1.12); } 100% { transform: scale(1); opacity: 1; } }
+        @keyframes emeraldGlowPulse { 0%, 100% { box-shadow: 0 0 0 0 rgba(16, 185, 129, 0); } 50% { box-shadow: 0 0 16px 2px rgba(16, 185, 129, 0.35); } }
+        @keyframes readyBtnGlow { 0%, 100% { box-shadow: 0 0 15px rgba(59, 130, 246, 0.35); transform: translateY(0); } 50% { box-shadow: 0 0 25px rgba(59, 130, 246, 0.65); transform: translateY(-1px); } }
+        .animate-card-in { animation: cardFadeInUp 0.45s cubic-bezier(0.16, 1, 0.3, 1) forwards; }
+        .animate-card-in-delayed { animation: cardFadeInUp 0.55s cubic-bezier(0.16, 1, 0.3, 1) 0.12s both; }
+        .animate-state-pop { animation: stateSuccessPop 0.4s cubic-bezier(0.34, 1.56, 0.64, 1); }
+        .animate-badge-pop { animation: badgePop 0.35s cubic-bezier(0.34, 1.56, 0.64, 1); }
+        .animate-emerald-glow { animation: emeraldGlowPulse 2.5s infinite ease-in-out; }
+        .animate-ready-btn { animation: readyBtnGlow 2s infinite ease-in-out; }
     </style>
 </head>
 <body class="bg-slate-50 dark:bg-[#080c14] text-slate-800 dark:text-slate-100 min-h-screen flex flex-col transition-colors duration-300 antialiased selection:bg-indigo-500 selection:text-white relative overflow-x-hidden">
@@ -1028,6 +1039,144 @@
         if (modal) modal.classList.add('hidden');
     }
 
+    function handleFileSelect(event, type) {
+        const file = event.target.files && event.target.files[0];
+        if (!file) return;
+
+        showProgress('قراءة', file.name, 'جاري تحليل خلايا وسجلات الملف...', 30, 'تحويل ورقة العمل إلى هيكل بيانات...');
+
+        const reader = new FileReader();
+        reader.onload = function(e) {
+            try {
+                const data = new Uint8Array(e.target.result);
+                let workbook;
+                try {
+                    workbook = XLSX.read(data, { type: 'array', codepage: 65001 });
+                } catch (err) {
+                    const text = new TextDecoder('utf-8').decode(data);
+                    workbook = XLSX.read(text, { type: 'string' });
+                }
+
+                const firstSheetName = workbook.SheetNames[0];
+                if (!firstSheetName) throw new Error('لا توجد أوراق عمل في الملف');
+                const worksheet = workbook.Sheets[firstSheetName];
+                const rawJson = XLSX.utils.sheet_to_json(worksheet, { defval: '', raw: false });
+
+                // Clean BOM & trim keys and rows
+                const json = rawJson.map(row => {
+                    const clean = {};
+                    for (let k in row) {
+                        const cleanKey = k.replace(/^\uFEFF/, '').trim();
+                        clean[cleanKey] = typeof row[k] === 'string' ? row[k].trim() : row[k];
+                    }
+                    return clean;
+                }).filter(row => Object.values(row).some(v => v !== undefined && v !== null && String(v).trim() !== ''));
+
+                if (type === 1) {
+                    sheet1 = json;
+                    const nameDesc = document.getElementById('file-name-desc-1');
+                    if (nameDesc) nameDesc.innerText = file.name;
+                    const badge = document.getElementById('badge-1');
+                    if (badge) {
+                        badge.className = "text-[11px] font-medium text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded border border-emerald-500/20";
+                        badge.innerText = `${sheet1.length} ماكينة ✅`;
+                    }
+                    const btnText = document.getElementById('btn-text-1');
+                    if (btnText) btnText.innerText = 'تغيير الملف 🔄';
+                    const clearBtn = document.getElementById('clear-btn-1');
+                    if (clearBtn) clearBtn.classList.remove('hidden');
+                    const cardBox = document.getElementById('card-box-1');
+                    if (cardBox) cardBox.className = "border border-dashed border-emerald-500/60 bg-emerald-950/20 rounded-xl p-4 flex flex-col justify-between gap-4 transition-all group";
+                } else {
+                    sheet2 = json;
+                    const nameDesc = document.getElementById('file-name-desc-2');
+                    if (nameDesc) nameDesc.innerText = file.name;
+                    const badge = document.getElementById('badge-2');
+                    if (badge) {
+                        badge.className = "text-[11px] font-medium text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded border border-emerald-500/20";
+                        badge.innerText = `${sheet2.length} سجل ✅`;
+                    }
+                    const btnText = document.getElementById('btn-text-2');
+                    if (btnText) btnText.innerText = 'تغيير الملف 🔄';
+                    const clearBtn = document.getElementById('clear-btn-2');
+                    if (clearBtn) clearBtn.classList.remove('hidden');
+                    const cardBox = document.getElementById('card-box-2');
+                    if (cardBox) cardBox.className = "border border-dashed border-emerald-500/60 bg-emerald-950/20 rounded-xl p-4 flex flex-col justify-between gap-4 transition-all group";
+                }
+
+                updateUploadCountBadge();
+                updateDropdowns();
+                showProgress('قراءة', file.name, 'اكتملت القراءة بنجاح!', 100, `تم قراءة ${json.length} سجل بنجاح`);
+                setTimeout(hideProgress, 400);
+
+                if (sheet1.length > 0 && sheet2.length > 0) {
+                    runMatchingAlgorithm();
+                }
+            } catch (err) {
+                console.error(err);
+                hideProgress();
+                alert('حدث خطأ أثناء قراءة الملف. يرجى التأكد من صيغة Excel أو CSV');
+            }
+        };
+        reader.readAsArrayBuffer(file);
+    }
+
+    function clearSheet(type) {
+        if (type === 1) {
+            sheet1 = [];
+            const nameDesc = document.getElementById('file-name-desc-1');
+            if (nameDesc) nameDesc.innerText = "اضغط هنا لرفع الملف (Excel/CSV)";
+            const badge = document.getElementById('badge-1');
+            if (badge) {
+                badge.className = "text-[11px] font-medium text-rose-400 bg-rose-500/10 px-2 py-0.5 rounded border border-rose-500/20";
+                badge.innerText = "غير مرفوع";
+            }
+            const btnText = document.getElementById('btn-text-1');
+            if (btnText) btnText.innerText = "رفع الملف";
+            const clearBtn = document.getElementById('clear-btn-1');
+            if (clearBtn) clearBtn.classList.add('hidden');
+            const cardBox = document.getElementById('card-box-1');
+            if (cardBox) cardBox.className = "border border-dashed border-slate-700 hover:border-blue-500/50 bg-slate-800/30 rounded-xl p-4 flex flex-col justify-between gap-4 transition-all group";
+        } else {
+            sheet2 = [];
+            const nameDesc = document.getElementById('file-name-desc-2');
+            if (nameDesc) nameDesc.innerText = "اضغط هنا لرفع الملف (Excel/CSV)";
+            const badge = document.getElementById('badge-2');
+            if (badge) {
+                badge.className = "text-[11px] font-medium text-rose-400 bg-rose-500/10 px-2 py-0.5 rounded border border-rose-500/20";
+                badge.innerText = "غير مرفوع";
+            }
+            const btnText = document.getElementById('btn-text-2');
+            if (btnText) btnText.innerText = "رفع الملف";
+            const clearBtn = document.getElementById('clear-btn-2');
+            if (clearBtn) clearBtn.classList.add('hidden');
+            const cardBox = document.getElementById('card-box-2');
+            if (cardBox) cardBox.className = "border border-dashed border-slate-700 hover:border-indigo-500/50 bg-slate-800/30 rounded-xl p-4 flex flex-col justify-between gap-4 transition-all group";
+        }
+        updateUploadCountBadge();
+    }
+
+    function updateUploadCountBadge() {
+        const uploaded = (sheet1.length > 0 ? 1 : 0) + (sheet2.length > 0 ? 1 : 0);
+        const countBadge = document.getElementById('uploadCountBadge');
+        if (countBadge) {
+            countBadge.innerText = (2 - uploaded === 0) ? 'اكتمل رفع الملفين ✅' : `${2 - uploaded} ملفات متبقية`;
+            countBadge.className = (2 - uploaded === 0) ? "text-xs px-2.5 py-1 rounded-md bg-emerald-500/10 text-emerald-300 border border-emerald-500/30 font-medium" : "text-xs px-2.5 py-1 rounded-md bg-slate-800 text-slate-300 border border-slate-700 font-medium";
+        }
+        const pulseDot = document.getElementById('statusPulseDot');
+        if (pulseDot) {
+            pulseDot.className = (uploaded === 2) ? "w-3 h-3 rounded-full bg-emerald-400 animate-pulse shadow-sm shadow-emerald-400/50" : "w-3 h-3 rounded-full bg-amber-400 animate-pulse";
+        }
+        const statusText = document.getElementById('uploadStatusText');
+        if (statusText) {
+            statusText.innerText = (uploaded === 2) ? 'الملفات جاهزة لبدء عملية المطابقة الفورية' : 'بانتظار رفع الملفات لبدء العملية';
+        }
+        const matchBtnCount = document.getElementById('matchBtnCount');
+        if (matchBtnCount) {
+            matchBtnCount.innerText = expandedRows.length;
+        }
+    }
+
     function loadSampleData() {
         showProgress('قراءة', 'نموذج_شيت_ربط_المناديب_والحسابات.csv', 'جاري تحليل خلايا وسجلات ملف الإكسل...', 60, 'تحويل ورقة العمل إلى هيكل بيانات JSON...');
         setTimeout(() => {
@@ -1051,14 +1200,35 @@
                 { "رقم الماكينة": "POS-400", "رقم حساب المندوب": "777-ERR", "اسم المندوب": "إبراهيم حسني مراد" }
             ];
 
-            document.getElementById('status-name-1').innerText = "عينة_شيت_الماكينات.xlsx";
-            document.getElementById('badge-1').className = "text-[10px] font-bold text-emerald-600 bg-emerald-500/10 px-2 py-1 rounded";
-            document.getElementById('badge-1').innerText = "تم (7)";
+            const nameDesc1 = document.getElementById('file-name-desc-1');
+            if (nameDesc1) nameDesc1.innerText = "عينة_شيت_الماكينات.xlsx";
+            const badge1 = document.getElementById('badge-1');
+            if (badge1) {
+                badge1.className = "text-[11px] font-medium text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded border border-emerald-500/20";
+                badge1.innerText = "7 ماكينة ✅";
+            }
+            const btn1 = document.getElementById('btn-text-1');
+            if (btn1) btn1.innerText = "تغيير الملف 🔄";
+            const clear1 = document.getElementById('clear-btn-1');
+            if (clear1) clear1.classList.remove('hidden');
+            const box1 = document.getElementById('card-box-1');
+            if (box1) box1.className = "border border-dashed border-emerald-500/60 bg-emerald-950/20 rounded-xl p-4 flex flex-col justify-between gap-4 transition-all group";
 
-            document.getElementById('status-name-2').innerText = "عينة_شيت_المناديب.xlsx";
-            document.getElementById('badge-2').className = "text-[10px] font-bold text-emerald-600 bg-emerald-500/10 px-2 py-1 rounded";
-            document.getElementById('badge-2').innerText = "تم (7)";
+            const nameDesc2 = document.getElementById('file-name-desc-2');
+            if (nameDesc2) nameDesc2.innerText = "عينة_شيت_المناديب.xlsx";
+            const badge2 = document.getElementById('badge-2');
+            if (badge2) {
+                badge2.className = "text-[11px] font-medium text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded border border-emerald-500/20";
+                badge2.innerText = "7 سجل ✅";
+            }
+            const btn2 = document.getElementById('btn-text-2');
+            if (btn2) btn2.innerText = "تغيير الملف 🔄";
+            const clear2 = document.getElementById('clear-btn-2');
+            if (clear2) clear2.classList.remove('hidden');
+            const box2 = document.getElementById('card-box-2');
+            if (box2) box2.className = "border border-dashed border-emerald-500/60 bg-emerald-950/20 rounded-xl p-4 flex flex-col justify-between gap-4 transition-all group";
 
+            updateUploadCountBadge();
             updateDropdowns();
             runMatchingAlgorithm();
             showProgress('قراءة', 'نموذج_شيت_ربط_المناديب_والحسابات.csv', 'اكتملت المعالجة بنجاح!', 100, 'تم تحميل العينة ومطابقة النتائج بنجاح');

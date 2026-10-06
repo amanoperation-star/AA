@@ -41,6 +41,17 @@
         .cartoon-btn { border: 3px solid #0f172a; box-shadow: 4px 4px 0px #0f172a; transition: all 0.15s ease; }
         .cartoon-btn:hover { transform: translate(-2px, -2px); box-shadow: 6px 6px 0px #0f172a; }
         .cartoon-btn:active { transform: translate(2px, 2px); box-shadow: 2px 2px 0px #0f172a; }
+        @keyframes cardFadeInUp { from { opacity: 0; transform: translateY(16px) scale(0.98); } to { opacity: 1; transform: translateY(0) scale(1); } }
+        @keyframes stateSuccessPop { 0% { transform: scale(0.96); } 50% { transform: scale(1.025); } 100% { transform: scale(1); } }
+        @keyframes badgePop { 0% { transform: scale(0.75); opacity: 0.4; } 60% { transform: scale(1.12); } 100% { transform: scale(1); opacity: 1; } }
+        @keyframes emeraldGlowPulse { 0%, 100% { box-shadow: 0 0 0 0 rgba(16, 185, 129, 0); } 50% { box-shadow: 0 0 16px 2px rgba(16, 185, 129, 0.35); } }
+        @keyframes readyBtnGlow { 0%, 100% { box-shadow: 0 0 15px rgba(59, 130, 246, 0.35); transform: translateY(0); } 50% { box-shadow: 0 0 25px rgba(59, 130, 246, 0.65); transform: translateY(-1px); } }
+        .animate-card-in { animation: cardFadeInUp 0.45s cubic-bezier(0.16, 1, 0.3, 1) forwards; }
+        .animate-card-in-delayed { animation: cardFadeInUp 0.55s cubic-bezier(0.16, 1, 0.3, 1) 0.12s both; }
+        .animate-state-pop { animation: stateSuccessPop 0.4s cubic-bezier(0.34, 1.56, 0.64, 1); }
+        .animate-badge-pop { animation: badgePop 0.35s cubic-bezier(0.34, 1.56, 0.64, 1); }
+        .animate-emerald-glow { animation: emeraldGlowPulse 2.5s infinite ease-in-out; }
+        .animate-ready-btn { animation: readyBtnGlow 2s infinite ease-in-out; }
     </style>
 </head>
 <body class="bg-slate-50 dark:bg-[#080c14] text-slate-800 dark:text-slate-100 min-h-screen flex flex-col transition-colors duration-300 antialiased selection:bg-indigo-500 selection:text-white relative overflow-x-hidden">

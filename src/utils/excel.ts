@@ -3,10 +3,127 @@ import { ExpandedRow, SheetRow } from '../types';
 
 export async function parseExcelFile(file: File): Promise<SheetRow[]> {
   const buffer = await file.arrayBuffer();
-  const workbook = XLSX.read(new Uint8Array(buffer), { type: 'array' });
-  const firstSheetName = workbook.SheetNames[0];
-  const worksheet = workbook.Sheets[firstSheetName];
-  return XLSX.utils.sheet_to_json<SheetRow>(worksheet, { defval: '' });
+  let workbook: XLSX.WorkBook | null = null;
+
+  // 1. Try reading with codepage 65001 (UTF-8)
+  try {
+    workbook = XLSX.read(new Uint8Array(buffer), { type: 'array', codepage: 65001 });
+  } catch (err1) {
+    // 2. Try UTF-8 string decoding
+    try {
+      const text = new TextDecoder('utf-8').decode(buffer);
+      workbook = XLSX.read(text, { type: 'string' });
+    } catch (err2) {
+      // 3. Try windows-1256 for Arabic Windows exports
+      try {
+        const text1256 = new TextDecoder('windows-1256').decode(buffer);
+        workbook = XLSX.read(text1256, { type: 'string' });
+      } catch (err3) {
+        throw new Error('تعذر قراءة صيغة الملف، يرجى التأكد من صلاحية ملف الإكسل أو CSV.');
+      }
+    }
+  }
+
+  if (!workbook || !workbook.SheetNames || workbook.SheetNames.length === 0) {
+    return [];
+  }
+
+  // Helper to extract rows from any worksheet with smart header detection
+  const extractRowsFromWorksheet = (worksheet: XLSX.WorkSheet): SheetRow[] => {
+    if (!worksheet || !worksheet['!ref']) return [];
+
+    // Extract as array of rows (2D array)
+    const aoa = XLSX.utils.sheet_to_json<any[]>(worksheet, { header: 1, defval: '', raw: false });
+    if (!aoa || aoa.length === 0) return [];
+
+    // Find the actual header row (some files have title banners or empty rows in rows 0-4)
+    let headerRowIdx = -1;
+    for (let r = 0; r < Math.min(aoa.length, 12); r++) {
+      const row = aoa[r];
+      if (!Array.isArray(row)) continue;
+      const nonEmptyCells = row.map((c) => String(c ?? '').trim()).filter((c) => c !== '');
+      if (nonEmptyCells.length >= 1) {
+        const hasKnownKeywords = nonEmptyCells.some((c) =>
+          /ماكينة|جهاز|pos|machine|sn|id|كود|حساب|مندوب|اسم|فرع|تاريخ|مسلسل|code|acc|name|terminal|merchant/i.test(c)
+        );
+        if (hasKnownKeywords) {
+          headerRowIdx = r;
+          break;
+        }
+        if (headerRowIdx === -1 && nonEmptyCells.length >= 2) {
+          headerRowIdx = r;
+        }
+      }
+    }
+
+    if (headerRowIdx === -1) {
+      headerRowIdx = 0;
+    }
+
+    const rawHeaders = (aoa[headerRowIdx] || []).map((h, colIdx) => {
+      const cleanH = String(h ?? '').replace(/^\uFEFF/, '').trim();
+      return cleanH || `عمود_${colIdx + 1}`;
+    });
+
+    const result: SheetRow[] = [];
+    for (let r = headerRowIdx + 1; r < aoa.length; r++) {
+      const row = aoa[r];
+      if (!Array.isArray(row)) continue;
+      const rowObj: SheetRow = {};
+      let hasData = false;
+
+      for (let c = 0; c < rawHeaders.length; c++) {
+        const cellVal = row[c] !== undefined && row[c] !== null ? String(row[c]).trim() : '';
+        const headerName = rawHeaders[c];
+        rowObj[headerName] = cellVal;
+        if (cellVal !== '') {
+          hasData = true;
+        }
+      }
+
+      if (hasData) {
+        result.push(rowObj);
+      }
+    }
+
+    return result;
+  };
+
+  // Check all sheets in the workbook and pick the one with the most records
+  let bestRows: SheetRow[] = [];
+  for (const sheetName of workbook.SheetNames) {
+    const ws = workbook.Sheets[sheetName];
+    const candidateRows = extractRowsFromWorksheet(ws);
+    if (candidateRows.length > bestRows.length) {
+      bestRows = candidateRows;
+    }
+  }
+
+  // Fallback: standard sheet_to_json if aoa extraction yielded nothing
+  if (bestRows.length === 0) {
+    for (const sheetName of workbook.SheetNames) {
+      const ws = workbook.Sheets[sheetName];
+      const rawRows = XLSX.utils.sheet_to_json<SheetRow>(ws, { defval: '', raw: false });
+      const cleaned = rawRows
+        .map((row) => {
+          const cRow: SheetRow = {};
+          for (const key of Object.keys(row)) {
+            const cleanKey = key.replace(/^\uFEFF/, '').trim();
+            cRow[cleanKey] = typeof row[key] === 'string' ? row[key].trim() : row[key];
+          }
+          return cRow;
+        })
+        .filter((row) =>
+          Object.values(row).some((v) => v !== undefined && v !== null && String(v).trim() !== '')
+        );
+
+      if (cleaned.length > bestRows.length) {
+        bestRows = cleaned;
+      }
+    }
+  }
+
+  return bestRows;
 }
 
 export function downloadTemplateFile(templateType: 1 | 2, format: 'xlsx' | 'csv' = 'xlsx') {
