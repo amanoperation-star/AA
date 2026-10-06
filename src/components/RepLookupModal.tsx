@@ -70,7 +70,7 @@ export const RepLookupModal: React.FC<RepLookupModalProps> = ({
         repList: [],
         machineList: [],
         machineToRepsMap: new Map<string, Array<{ account: string; name: string }>>(),
-        repToMachinesMap: new Map<string, { account: string; name: string; machines: Set<string> }>(),
+        repToMachinesMap: new Map<string, { account: string; name: string; machines: string[] }>(),
       };
     }
 
@@ -89,7 +89,7 @@ export const RepLookupModal: React.FC<RepLookupModalProps> = ({
       : keys.find((k) => /اسم.*مندوب|اسم.*العميل|اسم.*المستخدم|اسم|rep.*name|agent.*name|name/i.test(k)) || keys[1] || keys[0];
 
     const machineToRepsMap = new Map<string, Array<{ account: string; name: string }>>();
-    const repToMachinesMap = new Map<string, { account: string; name: string; machines: Set<string> }>();
+    const repToMachinesMap = new Map<string, { account: string; name: string; machines: string[] }>();
 
     sheet2.forEach((row) => {
       const rawM = row[mCol];
@@ -110,24 +110,23 @@ export const RepLookupModal: React.FC<RepLookupModalProps> = ({
         machineToRepsMap.set(machineId, []);
       }
       const existingInMachine = machineToRepsMap.get(machineId)!;
-      if (!existingInMachine.some((r) => r.account === accVal && r.name === repName)) {
-        existingInMachine.push({ account: accVal, name: repName });
-      }
+      // Do not deduplicate representatives if user wants full count with duplicates
+      existingInMachine.push({ account: accVal, name: repName });
 
       // Index by rep
       if (accVal !== 'غير متوفر' || (repName && repName !== 'لا يوجد مندوب')) {
         const repKey = accVal !== 'غير متوفر' ? accVal.toLowerCase() : repName.toLowerCase();
         if (!repToMachinesMap.has(repKey)) {
-          repToMachinesMap.set(repKey, { account: accVal, name: repName, machines: new Set() });
+          repToMachinesMap.set(repKey, { account: accVal, name: repName, machines: [] });
         }
-        repToMachinesMap.get(repKey)!.machines.add(machineId);
+        repToMachinesMap.get(repKey)!.machines.push(machineId);
       }
     });
 
     const repList = Array.from(repToMachinesMap.values()).map((r) => ({
       account: r.account,
       name: r.name,
-      machineCount: r.machines.size,
+      machineCount: r.machines.length,
     })).sort((a, b) => b.machineCount - a.machineCount);
 
     const machineList = Array.from(machineToRepsMap.entries()).map(([m, reps]) => ({
@@ -184,6 +183,27 @@ export const RepLookupModal: React.FC<RepLookupModalProps> = ({
     return sheet2Index.machineList;
   }, [machinesResults, sheet1, colM1, sheet2Index]);
 
+  // Performance Optimization: Dynamic search filter with a maximum of 100 options in the DOM at once
+  const filteredDropdownReps = useMemo(() => {
+    if (!searchQuery.trim()) {
+      return uniqueReps.slice(0, 100); // Show top 100 by machine count
+    }
+    const q = searchQuery.toLowerCase().trim();
+    return uniqueReps
+      .filter((r) => r.name.toLowerCase().includes(q) || r.account.toLowerCase().includes(q))
+      .slice(0, 100);
+  }, [uniqueReps, searchQuery]);
+
+  const filteredDropdownMachines = useMemo(() => {
+    if (!searchQuery.trim()) {
+      return uniqueMachines.slice(0, 100);
+    }
+    const q = searchQuery.toLowerCase().trim();
+    return uniqueMachines
+      .filter((m) => m.machine.toLowerCase().includes(q))
+      .slice(0, 100);
+  }, [uniqueMachines, searchQuery]);
+
   // Clean chips for reps (excluding "لا يوجد مندوب" placeholders)
   const repQuickChips = useMemo(() => {
     return uniqueReps
@@ -196,6 +216,7 @@ export const RepLookupModal: React.FC<RepLookupModalProps> = ({
     return uniqueMachines.slice(0, 8);
   }, [uniqueMachines]);
 
+  // Representative Matched Data
   // Representative Matched Data
   const matchedRepData = useMemo(() => {
     if (!searchQuery.trim() || activeTab !== 'rep') {
@@ -215,9 +236,7 @@ export const RepLookupModal: React.FC<RepLookupModalProps> = ({
       if (matchedRepRows.length > 0) {
         const primaryAccount = matchedRepRows[0].account;
         const primaryName = matchedRepRows[0].repName;
-        const targetMachineIds = new Set(matchedRepRows.map((r) => r.machine));
 
-        const seenMachines = new Set<string>();
         const machinesList: Array<{
           machine: string;
           totalRepsOnMachine: number;
@@ -227,30 +246,23 @@ export const RepLookupModal: React.FC<RepLookupModalProps> = ({
           status: 'single' | 'multi' | 'none';
         }> = [];
 
-        machinesResults
-          .filter((m) => targetMachineIds.has(m.machine))
-          .forEach((m) => {
-            if (seenMachines.has(m.machine)) return;
-            seenMachines.add(m.machine);
-
-            const thisRepEntry = m.reps.find(
-              (r) =>
-                r.account.toLowerCase().includes(q) || r.name.toLowerCase().includes(q)
-            ) || m.reps[0];
-
-            const otherReps = m.reps.filter(
-              (r) => r.account !== thisRepEntry.account && r.name !== thisRepEntry.name
-            );
+        matchedRepRows.forEach((row) => {
+          const m = machinesResults.find((mr) => mr.machine === row.machine);
+          if (m) {
+            // Find the index of current row to exclude only this specific assignment instance
+            const currentIdx = m.reps.findIndex((r) => r.account === row.account && r.name === row.repName);
+            const otherReps = m.reps.filter((_, rIdx) => rIdx !== currentIdx);
 
             machinesList.push({
-              machine: m.machine,
+              machine: row.machine,
               totalRepsOnMachine: m.repCount,
-              repAccount: thisRepEntry.account,
-              repName: thisRepEntry.name,
+              repAccount: row.account,
+              repName: row.repName,
               otherReps,
               status: m.status,
             });
-          });
+          }
+        });
 
         const soleCount = machinesList.filter((m) => m.totalRepsOnMachine === 1).length;
         const sharedCount = machinesList.filter((m) => m.totalRepsOnMachine > 1).length;
@@ -270,7 +282,7 @@ export const RepLookupModal: React.FC<RepLookupModalProps> = ({
 
     // CASE 2: Using sheet2 direct index
     if (sheet2Index.repToMachinesMap.size > 0) {
-      let matchedEntry: { account: string; name: string; machines: Set<string> } | null = null;
+      let matchedEntry: { account: string; name: string; machines: string[] } | null = null;
 
       for (const [key, val] of sheet2Index.repToMachinesMap.entries()) {
         if (key.includes(q) || val.account.toLowerCase().includes(q) || val.name.toLowerCase().includes(q)) {
@@ -282,14 +294,15 @@ export const RepLookupModal: React.FC<RepLookupModalProps> = ({
       if (matchedEntry) {
         const primaryAccount = matchedEntry.account;
         const primaryName = matchedEntry.name;
-        const machineIds = Array.from(matchedEntry.machines);
+        const machineIds = matchedEntry.machines;
 
         const machinesList = machineIds.map((mId) => {
           const allRepsOnThisMachine = sheet2Index.machineToRepsMap.get(mId) || [{ account: primaryAccount, name: primaryName }];
-          const otherReps = allRepsOnThisMachine.filter(
-            (r) => r.account !== primaryAccount && r.name !== primaryName
-          );
           const totalRepsOnMachine = allRepsOnThisMachine.length;
+
+          // Exclude only the current instance
+          const currentIdx = allRepsOnThisMachine.findIndex((r) => r.account === primaryAccount && r.name === primaryName);
+          const otherReps = allRepsOnThisMachine.filter((_, rIdx) => rIdx !== currentIdx);
 
           return {
             machine: mId,
@@ -564,7 +577,7 @@ export const RepLookupModal: React.FC<RepLookupModalProps> = ({
                   className="w-full bg-[#050811] border border-slate-700/80 rounded-xl px-3 py-2.5 text-xs text-blue-400 font-bold focus:outline-none focus:border-blue-500 transition cursor-pointer shadow-inner truncate"
                 >
                   <option value="">-- اختر مندوب من القائمة ({uniqueReps.length}) --</option>
-                  {uniqueReps.map((r, rIdx) => (
+                  {filteredDropdownReps.map((r, rIdx) => (
                     <option key={`${r.account}-${rIdx}`} value={r.account !== 'غير متوفر' ? r.account : r.name}>
                       {r.name} {r.account !== 'غير متوفر' ? `(حساب: ${r.account})` : ''} • [{r.machineCount} ماكينة]
                     </option>
@@ -577,7 +590,7 @@ export const RepLookupModal: React.FC<RepLookupModalProps> = ({
                   className="w-full bg-[#050811] border border-slate-700/80 rounded-xl px-3 py-2.5 text-xs text-indigo-400 font-bold focus:outline-none focus:border-indigo-500 transition cursor-pointer shadow-inner truncate"
                 >
                   <option value="">-- اختر ماكينة من القائمة ({uniqueMachines.length}) --</option>
-                  {uniqueMachines.map((m, mIdx) => (
+                  {filteredDropdownMachines.map((m, mIdx) => (
                     <option key={`${m.machine}-${mIdx}`} value={m.machine}>
                       {m.machine} • [{m.repCount} مناديب] {m.status === 'multi' ? '⚠️ مشتركة' : m.status === 'single' ? '✅ منفردة' : '❌ شاغرة'}
                     </option>
@@ -746,9 +759,9 @@ export const RepLookupModal: React.FC<RepLookupModalProps> = ({
                   </div>
                 </div>
 
-                {/* Machines Table for this Rep */}
-                <div className="border border-slate-800 rounded-2xl overflow-hidden bg-[#090e1a]">
-                  <div className="p-3 bg-[#060a14] border-b border-slate-800 flex items-center justify-between gap-3">
+                {/* Machines Cards for this Rep */}
+                <div className="space-y-3">
+                  <div className="p-3 bg-[#060a14] border border-slate-800 rounded-2xl flex items-center justify-between gap-3">
                     <div className="flex items-center gap-2">
                       <Layers className="w-4 h-4 text-blue-400" />
                       <span className="text-xs font-bold text-white">
@@ -766,76 +779,72 @@ export const RepLookupModal: React.FC<RepLookupModalProps> = ({
                     </button>
                   </div>
 
-                  <div className="overflow-x-auto max-h-[40vh]">
-                    <table className="w-full text-right border-collapse text-xs">
-                      <thead className="bg-[#050811] text-slate-400 font-bold border-b border-slate-800 sticky top-0">
-                        <tr>
-                          <th className="p-3 w-12 text-center font-mono">م</th>
-                          <th className="p-3 w-40">رقم الماكينة</th>
-                          <th className="p-3 w-36 text-center">نوع الملكية</th>
-                          <th className="p-3 w-32 text-center">التعدد</th>
-                          <th className="p-3">المناديب المشاركون على نفس الماكينة</th>
-                          <th className="p-3 w-28 text-center">فحص الماكينة</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-slate-800/80 text-slate-300">
-                        {matchedRepData.machines.map((m, idx) => (
-                          <tr key={`${m.machine}-${idx}`} className="hover:bg-slate-800/40 transition">
-                            <td className="p-3 text-center text-slate-500 font-mono font-bold">{idx + 1}</td>
-                            <td className="p-3 font-mono font-bold text-white tracking-wide">{m.machine}</td>
-                            <td className="p-3 text-center">
-                              {m.totalRepsOnMachine === 1 ? (
-                                <span className="px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-emerald-500/10 text-emerald-400 border border-emerald-500/30">
-                                  خاصة بالمندوب فقط
-                                </span>
-                              ) : (
-                                <span className="px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-amber-500/10 text-amber-400 border border-amber-500/30">
-                                  مشتركة
-                                </span>
-                              )}
-                            </td>
-                            <td className="p-3 text-center font-mono font-bold">
-                              {m.totalRepsOnMachine === 1 ? (
-                                <span className="text-emerald-400">1 مندوب</span>
-                              ) : (
-                                <span className="text-amber-400">{m.totalRepsOnMachine} مناديب</span>
-                              )}
-                            </td>
-                            <td className="p-3">
-                              {m.otherReps.length > 0 ? (
-                                <div className="flex items-center gap-1.5 flex-wrap">
-                                  {m.otherReps.map((r, rIdx) => (
-                                    <span
-                                      key={rIdx}
-                                      onClick={() => {
-                                        setSearchQuery(r.account !== 'غير متوفر' ? r.account : r.name);
-                                      }}
-                                      className="px-2 py-0.5 rounded-lg bg-slate-800 text-slate-300 border border-slate-700 text-[11px] hover:text-blue-400 hover:border-blue-500 cursor-pointer transition"
-                                      title="اضغط للاستعلام عن هذا المندوب"
-                                    >
-                                      {r.name} {r.account !== 'غير متوفر' ? `(${r.account})` : ''}
-                                    </span>
-                                  ))}
-                                </div>
-                              ) : (
-                                <span className="text-slate-500 text-xs">لا يوجد شركاء (المندوب الوحيد)</span>
-                              )}
-                            </td>
-                            <td className="p-3 text-center">
-                              <button
-                                onClick={() => {
-                                  setActiveTab('machine');
-                                  setSearchQuery(m.machine);
-                                }}
-                                className="px-2.5 py-1 rounded-lg bg-indigo-600/20 hover:bg-indigo-600 text-indigo-300 hover:text-white border border-indigo-500/30 text-[11px] font-bold transition cursor-pointer"
-                              >
-                                فحص الماكينة
-                              </button>
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
+                  {/* Grid of Cards */}
+                  <div className="overflow-y-auto max-h-[45vh] pr-1">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                      {matchedRepData.machines.map((m, idx) => (
+                        <div
+                          key={`${m.machine}-${idx}`}
+                          className="bg-[#0b1222] border border-slate-800 rounded-2xl p-4 flex flex-col justify-between gap-3 shadow-md hover:border-blue-500/50 transition-all"
+                        >
+                          {/* Card Header */}
+                          <div className="flex items-center justify-between border-b border-slate-800 pb-2">
+                            <div className="flex items-center gap-2">
+                              <span className="text-slate-500 font-mono text-[11px] font-bold">#{idx + 1}</span>
+                              <span className="font-mono font-black text-white text-sm tracking-wide">{m.machine}</span>
+                            </div>
+                            <span
+                              className={`px-2 py-0.5 rounded-lg text-[10px] font-black border ${
+                                m.totalRepsOnMachine === 1
+                                  ? 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30'
+                                  : 'bg-amber-500/15 text-amber-400 border-amber-500/30'
+                              }`}
+                            >
+                              {m.totalRepsOnMachine === 1 ? 'خاصة بالمندوب' : 'مشتركة'}
+                            </span>
+                          </div>
+
+                          {/* Card Content - Partners */}
+                          <div className="space-y-1.5">
+                            <span className="text-[10px] text-slate-400 font-bold block">
+                              {m.totalRepsOnMachine === 1 ? 'الملكية والشركاء:' : 'المناديب المشاركون:'}
+                            </span>
+                            {m.otherReps.length > 0 ? (
+                              <div className="flex items-center gap-1.5 flex-wrap">
+                                {m.otherReps.map((r, rIdx) => (
+                                  <span
+                                    key={rIdx}
+                                    onClick={() => setSearchQuery(r.account !== 'غير متوفر' ? r.account : r.name)}
+                                    className="px-2 py-0.5 rounded-lg bg-[#050811] hover:bg-slate-800 text-slate-300 border border-slate-800 hover:border-blue-500 text-[10px] hover:text-blue-400 cursor-pointer transition font-bold"
+                                    title="اضغط للاستعلام عن هذا المندوب"
+                                  >
+                                    {r.name} {r.account !== 'غير متوفر' ? `(${r.account})` : ''}
+                                  </span>
+                                ))}
+                              </div>
+                            ) : (
+                              <span className="text-slate-500 text-[11px]">المندوب هو المالك الوحيد ولا يوجد شركاء</span>
+                            )}
+                          </div>
+
+                          {/* Card Footer Actions */}
+                          <div className="pt-2 border-t border-slate-800 flex items-center justify-between">
+                            <span className="text-[10px] text-slate-500 font-mono font-bold">
+                              {m.totalRepsOnMachine === 1 ? '1 مندوب' : `${m.totalRepsOnMachine} مناديب`}
+                            </span>
+                            <button
+                              onClick={() => {
+                                setActiveTab('machine');
+                                setSearchQuery(m.machine);
+                              }}
+                              className="px-2.5 py-1 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-[10px] font-black transition cursor-pointer"
+                            >
+                              فحص الماكينة &larr;
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
                   </div>
                 </div>
               </div>
@@ -909,9 +918,9 @@ export const RepLookupModal: React.FC<RepLookupModalProps> = ({
                   </div>
                 </div>
 
-                {/* Reps Table for this Machine */}
-                <div className="border border-slate-800 rounded-2xl overflow-hidden bg-[#090e1a]">
-                  <div className="p-3 bg-[#060a14] border-b border-slate-800 flex items-center justify-between gap-3">
+                {/* Reps Cards for this Machine */}
+                <div className="space-y-3">
+                  <div className="p-3 bg-[#060a14] border border-slate-800 rounded-2xl flex items-center justify-between gap-3">
                     <div className="flex items-center gap-2">
                       <Users className="w-4 h-4 text-indigo-400" />
                       <span className="text-xs font-bold text-white">
@@ -929,66 +938,67 @@ export const RepLookupModal: React.FC<RepLookupModalProps> = ({
                     </button>
                   </div>
 
-                  <div className="overflow-x-auto max-h-[40vh]">
-                    <table className="w-full text-right border-collapse text-xs">
-                      <thead className="bg-[#050811] text-slate-400 font-bold border-b border-slate-800 sticky top-0">
-                        <tr>
-                          <th className="p-3 w-12 text-center font-mono">م</th>
-                          <th className="p-3 w-40">رقم حساب المندوب</th>
-                          <th className="p-3">اسم المندوب المسند</th>
-                          <th className="p-3 w-40 text-center">الترتيب</th>
-                          <th className="p-3 w-36 text-center">نوع التخصيص</th>
-                          <th className="p-3 w-32 text-center">استعلام المندوب</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-slate-800/80 text-slate-300">
-                        {matchedMachineData.reps.length === 0 ? (
-                          <tr>
-                            <td colSpan={6} className="p-8 text-center text-rose-400 font-bold">
-                              هذه الماكينة شاغرة ولم يتم إسناد أي مندوب لها في الشيت المرفوع.
-                            </td>
-                          </tr>
-                        ) : (
-                          matchedMachineData.reps.map((r, idx) => (
-                            <tr key={`${r.account}-${idx}`} className="hover:bg-slate-800/40 transition">
-                              <td className="p-3 text-center text-slate-500 font-mono font-bold">{idx + 1}</td>
-                              <td className="p-3 font-mono font-bold text-blue-400">
-                                {r.account !== 'غير متوفر' ? r.account : <span className="text-slate-500">غير متوفر</span>}
-                              </td>
-                              <td className="p-3 font-bold text-white flex items-center gap-2">
-                                <div className="w-6 h-6 rounded-full bg-slate-800 border border-slate-700 text-blue-400 flex items-center justify-center text-[10px]">
-                                  <User className="w-3.5 h-3.5" />
-                                </div>
-                                <span>{r.name}</span>
-                              </td>
-                              <td className="p-3 text-center">
-                                <span className="px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-slate-800 text-slate-300 border border-slate-700/60">
-                                  مندوب {idx + 1} من {matchedMachineData.repCount}
+                  {/* Grid of Cards */}
+                  <div className="overflow-y-auto max-h-[45vh] pr-1">
+                    {matchedMachineData.reps.length === 0 ? (
+                      <div className="p-8 text-center text-rose-400 bg-[#090e1a] border border-slate-800 rounded-2xl font-bold text-xs">
+                        هذه الماكينة شاغرة ولم يتم إسناد أي مندوب لها في الشيت المرفوع.
+                      </div>
+                    ) : (
+                      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                        {matchedMachineData.reps.map((r, idx) => (
+                          <div
+                            key={`${r.account}-${idx}`}
+                            className="bg-[#0b1222] border border-slate-800 rounded-2xl p-4 flex flex-col justify-between gap-3 shadow-md hover:border-indigo-500/50 transition-all"
+                          >
+                            {/* Card Header */}
+                            <div className="flex items-center justify-between border-b border-slate-800 pb-2">
+                              <div className="flex items-center gap-2">
+                                <span className="text-slate-500 font-mono text-[11px] font-bold">#{idx + 1}</span>
+                                <span className="font-mono font-bold text-blue-400 text-xs">
+                                  {r.account !== 'غير متوفر' ? `حساب: ${r.account}` : 'بدون حساب'}
                                 </span>
-                              </td>
-                              <td className="p-3 text-center">
-                                {matchedMachineData.repCount === 1 ? (
-                                  <span className="text-emerald-400 font-bold">منفرد (الوحيد)</span>
-                                ) : (
-                                  <span className="text-amber-400 font-bold">مشترك</span>
-                                )}
-                              </td>
-                              <td className="p-3 text-center">
-                                <button
-                                  onClick={() => {
-                                    setActiveTab('rep');
-                                    setSearchQuery(r.account !== 'غير متوفر' ? r.account : r.name);
-                                  }}
-                                  className="px-2.5 py-1 rounded-lg bg-blue-600/20 hover:bg-blue-600 text-blue-300 hover:text-white border border-blue-500/30 text-[11px] font-bold transition cursor-pointer"
-                                >
-                                  كشف ماكيناته
-                                </button>
-                              </td>
-                            </tr>
-                          ))
-                        )}
-                      </tbody>
-                    </table>
+                              </div>
+                              <span
+                                className={`px-2 py-0.5 rounded-lg text-[10px] font-black border ${
+                                  matchedMachineData.repCount === 1
+                                    ? 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30'
+                                    : 'bg-amber-500/15 text-amber-400 border-amber-500/30'
+                                }`}
+                              >
+                                {matchedMachineData.repCount === 1 ? 'منفرد (الوحيد)' : 'مشترك'}
+                              </span>
+                            </div>
+
+                            {/* Card Content - Rep Profile */}
+                            <div className="flex items-center gap-2.5">
+                              <div className="w-8 h-8 rounded-xl bg-indigo-500/15 border border-indigo-500/30 text-indigo-400 flex items-center justify-center font-bold text-xs shrink-0">
+                                <User className="w-4 h-4 text-indigo-400" />
+                              </div>
+                              <div className="min-w-0 flex-1">
+                                <p className="font-black text-xs text-white truncate">{r.name}</p>
+                                <span className="text-[10px] text-slate-500 font-bold block mt-0.5">
+                                  ترتيب التخصيص: مندوب {idx + 1} من {matchedMachineData.repCount}
+                                </span>
+                              </div>
+                            </div>
+
+                            {/* Card Footer Actions */}
+                            <div className="pt-2 border-t border-slate-800 flex justify-end">
+                              <button
+                                onClick={() => {
+                                  setActiveTab('rep');
+                                  setSearchQuery(r.account !== 'غير متوفر' ? r.account : r.name);
+                                }}
+                                className="px-2.5 py-1 rounded-lg bg-blue-600 hover:bg-blue-500 text-white text-[10px] font-black transition cursor-pointer"
+                              >
+                                كشف ماكيناته &larr;
+                              </button>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
                   </div>
                 </div>
               </div>

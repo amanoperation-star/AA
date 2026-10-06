@@ -1296,17 +1296,15 @@
                 const key = acc !== 'غير متوفر' ? acc.toLowerCase() : name.toLowerCase();
 
                 if (!repMap.has(key)) {
-                    repMap.set(key, { account: acc, name: name, machines: new Set() });
+                    repMap.set(key, { account: acc, name: name, machines: [] });
                 }
-                repMap.get(key).machines.add(r.machine);
+                repMap.get(key).machines.push(r.machine);
 
                 if (!machineMap.has(r.machine)) {
                     machineMap.set(r.machine, []);
                 }
                 const list = machineMap.get(r.machine);
-                if (!list.some(x => x.account === acc && x.name === name)) {
-                    list.push({ account: acc, name: name });
-                }
+                list.push({ account: acc, name: name });
             });
         } else if (sheet2.length > 0) {
             sheet2.forEach(row => {
@@ -1321,25 +1319,23 @@
                 const key = acc !== 'غير متوفر' ? acc.toLowerCase() : name.toLowerCase();
 
                 if (!repMap.has(key)) {
-                    repMap.set(key, { account: acc, name: name, machines: new Set() });
+                    repMap.set(key, { account: acc, name: name, machines: [] });
                 }
-                repMap.get(key).machines.add(machine);
+                repMap.get(key).machines.push(machine);
 
                 if (!machineMap.has(machine)) {
                     machineMap.set(machine, []);
                 }
                 const list = machineMap.get(machine);
-                if (!list.some(x => x.account === acc && x.name === name)) {
-                    list.push({ account: acc, name: name });
-                }
+                list.push({ account: acc, name: name });
             });
         }
 
         const repsList = Array.from(repMap.values()).map(r => ({
             account: r.account,
             name: r.name,
-            count: r.machines.size,
-            machines: Array.from(r.machines)
+            count: r.machines.length,
+            machines: r.machines
         })).sort((a, b) => b.count - a.count);
 
         const machinesList = Array.from(machineMap.entries()).map(([m, reps]) => ({
@@ -1387,8 +1383,12 @@
 
         if (currentLookupMode === 'rep') {
             const cleanReps = repsList.filter(r => r.name !== 'لا يوجد مندوب' || r.account !== 'غير متوفر');
+            const filteredReps = targetQuery 
+                ? cleanReps.filter(r => r.name.toLowerCase().includes(targetQuery) || r.account.toLowerCase().includes(targetQuery))
+                : cleanReps;
+
             select.innerHTML = `<option value="">-- اختر مندوب من القائمة (${cleanReps.length}) --</option>` + 
-                cleanReps.map(r => `<option value="${r.account !== 'غير متوفر' ? r.account : r.name}">${r.name} ${r.account !== 'غير متوفر' ? `(حساب: ${r.account})` : ''} • [${r.count} ماكينة]</option>`).join('');
+                filteredReps.slice(0, 100).map(r => `<option value="${r.account !== 'غير متوفر' ? r.account : r.name}">${r.name} ${r.account !== 'غير متوفر' ? `(حساب: ${r.account})` : ''} • [${r.count} ماكينة]</option>`).join('');
 
             if (chipsContainer) {
                 chipsContainer.innerHTML = `<span class="text-slate-400 text-xs shrink-0 font-bold ml-1">أبرز المناديب:</span>` +
@@ -1401,8 +1401,12 @@
                     }).join('') : '<span class="text-xs text-slate-500">ارفع شيت المناديب لتظهر هنا.</span>');
             }
         } else {
+            const filteredMachines = targetQuery
+                ? machinesList.filter(m => m.machine.toLowerCase().includes(targetQuery))
+                : machinesList;
+
             select.innerHTML = `<option value="">-- اختر ماكينة من القائمة (${machinesList.length}) --</option>` + 
-                machinesList.map(m => `<option value="${m.machine}">${m.machine} • [${m.repCount} مناديب] ${m.status === 'multi' ? '⚠️ مشتركة' : m.status === 'single' ? '✅ منفردة' : '❌ شاغرة'}</option>`).join('');
+                filteredMachines.slice(0, 100).map(m => `<option value="${m.machine}">${m.machine} • [${m.repCount} مناديب] ${m.status === 'multi' ? '⚠️ مشتركة' : m.status === 'single' ? '✅ منفردة' : '❌ شاغرة'}</option>`).join('');
 
             if (chipsContainer) {
                 chipsContainer.innerHTML = `<span class="text-slate-400 text-xs shrink-0 font-bold ml-1">أبرز الماكينات:</span>` +
@@ -1564,8 +1568,11 @@
 
             let rowsHtml = machines.map((mId, i) => {
                 const allReps = machineMap.get(mId) || [{ account: repAcc, name: repName }];
-                const otherReps = allReps.filter(r => r.account !== repAcc && r.name !== repName);
                 const totalReps = allReps.length;
+
+                // Find index of current representative instance on this specific row index to exclude only this specific assignment
+                const currentIdx = allReps.findIndex(r => r.account === repAcc && r.name === repName);
+                const otherReps = allReps.filter((_, rIdx) => rIdx !== currentIdx);
 
                 if (totalReps === 1) soleCount++;
                 else sharedCount++;

@@ -256,9 +256,7 @@ export default function App() {
           repMap.set(key, []);
         }
         const arr = repMap.get(key)!;
-        if (!arr.some((r) => r.name === repName && r.account === repAcc)) {
-          arr.push({ account: repAcc, name: repName, isMissingRepName: isRepNameEmpty });
-        }
+        arr.push({ account: repAcc, name: repName, isMissingRepName: isRepNameEmpty });
       }
     }
 
@@ -651,6 +649,76 @@ export default function App() {
     return filteredRows.slice(start, start + pageSize);
   }, [filteredRows, currentPage, pageSize]);
 
+  // Virtualization / Windowing Setup for High Performance Rendering in Tab 4
+  const [tableScrollTop, setTableScrollTop] = useState(0);
+  const [cardsScrollTop, setCardsScrollTop] = useState(0);
+  const tableContainerRef = useRef<HTMLDivElement>(null);
+  const cardsContainerRef = useRef<HTMLDivElement>(null);
+  
+  // Heights and Viewport setup
+  const tableRowHeight = 53;
+  const cardsRowHeight = 230; // estimated grid row height
+  const viewportHeight = 550; // container max height
+  
+  // Dynamic screen columns count detector to align grid layout with virtualization
+  const [colsCount, setColsCount] = useState(4);
+  useEffect(() => {
+    const handleResize = () => {
+      const w = window.innerWidth;
+      if (w < 768) setColsCount(1);
+      else if (w < 1024) setColsCount(2);
+      else if (w < 1280) setColsCount(3);
+      else setColsCount(4);
+    };
+    handleResize();
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
+
+  // Reset scroll offsets when current filter, searchQuery, viewMode, or currentPage changes
+  useEffect(() => {
+    setTableScrollTop(0);
+    setCardsScrollTop(0);
+    if (tableContainerRef.current) tableContainerRef.current.scrollTop = 0;
+    if (cardsContainerRef.current) cardsContainerRef.current.scrollTop = 0;
+  }, [currentPage, searchQuery, currentFilter, viewMode]);
+
+  // Memoized table virtualization parameters
+  const tableVirtualState = useMemo(() => {
+    const visibleCount = Math.ceil(viewportHeight / tableRowHeight);
+    const start = Math.max(0, Math.floor(tableScrollTop / tableRowHeight) - 3); // 3 buffer rows
+    const end = Math.min(displayedSlice.length, start + visibleCount + 6); // 6 buffer rows
+    const topPadding = start * tableRowHeight;
+    const bottomPadding = Math.max(0, (displayedSlice.length - end) * tableRowHeight);
+    
+    return {
+      startIndex: start,
+      endIndex: end,
+      topPadding,
+      bottomPadding,
+    };
+  }, [tableScrollTop, displayedSlice, viewportHeight]);
+
+  // Memoized cards virtualization parameters
+  const cardsVirtualState = useMemo(() => {
+    const totalRows = Math.ceil(displayedSlice.length / colsCount);
+    const visibleRows = Math.ceil(viewportHeight / cardsRowHeight);
+    const startRow = Math.max(0, Math.floor(cardsScrollTop / cardsRowHeight) - 1); // 1 buffer row
+    const endRow = Math.min(totalRows, startRow + visibleRows + 2); // 2 buffer rows
+    
+    const startIndex = startRow * colsCount;
+    const endIndex = Math.min(displayedSlice.length, endRow * colsCount);
+    const topPadding = startRow * cardsRowHeight;
+    const bottomPadding = Math.max(0, (totalRows - endRow) * cardsRowHeight);
+    
+    return {
+      startIndex,
+      endIndex,
+      topPadding,
+      bottomPadding,
+    };
+  }, [cardsScrollTop, displayedSlice, colsCount, viewportHeight]);
+
   // KPIs
   const singleCount = machinesResults.filter((m) => m.status === 'single').length;
   const multiCount = machinesResults.filter((m) => m.status === 'multi').length;
@@ -976,73 +1044,323 @@ export default function App() {
           </div>
         </div>
 
-        {/* Tab Navigation Bar */}
-        <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 p-1.5 rounded-2xl shadow-sm flex items-center gap-2 overflow-x-auto">
+        {/* Navigation Tabs - Modern Cards Grid */}
+        <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-6 gap-2.5 sm:gap-3">
+          {/* Card 1: Sheet 1 */}
           <button
             onClick={() => setCurrentTab(1)}
-            className={`flex-1 py-2 px-3 rounded-xl font-bold text-xs whitespace-nowrap transition-all cursor-pointer ${
+            className={`p-3 sm:p-3.5 rounded-2xl border text-right transition-all duration-200 flex flex-col justify-between gap-2.5 cursor-pointer group relative overflow-hidden ${
               currentTab === 1
-                ? 'bg-indigo-600 text-white shadow-sm'
-                : 'text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800'
+                ? 'bg-indigo-600 border-indigo-400 text-white shadow-lg shadow-indigo-600/30 ring-2 ring-indigo-400/40'
+                : 'bg-white dark:bg-[#0a0f1d] border-slate-200 dark:border-slate-800 text-slate-700 dark:text-slate-300 hover:border-indigo-400/60 hover:bg-slate-50 dark:hover:bg-[#0e1628]'
             }`}
           >
-            1. شيت الماكينات المستهدفة
+            <div className="flex items-center justify-between w-full">
+              <span
+                className={`text-[10px] font-mono font-black px-2 py-0.5 rounded-md ${
+                  currentTab === 1
+                    ? 'bg-white/20 text-white'
+                    : 'bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-400'
+                }`}
+              >
+                01
+              </span>
+              <div
+                className={`w-7 h-7 rounded-xl flex items-center justify-center transition-colors ${
+                  currentTab === 1
+                    ? 'bg-white/20 text-white'
+                    : 'bg-indigo-500/10 text-indigo-500 dark:text-indigo-400 group-hover:bg-indigo-500/20'
+                }`}
+              >
+                <UploadCloud className="w-4 h-4" />
+              </div>
+            </div>
+
+            <div>
+              <h4
+                className={`text-xs font-bold leading-tight ${
+                  currentTab === 1 ? 'text-white' : 'text-slate-900 dark:text-white'
+                }`}
+              >
+                1. شيت الماكينات
+              </h4>
+              <p
+                className={`text-[10px] mt-1 font-medium truncate ${
+                  currentTab === 1 ? 'text-indigo-100 font-bold' : 'text-slate-500 dark:text-slate-400'
+                }`}
+              >
+                {sheet1.length > 0 ? `${sheet1.length.toLocaleString('ar-EG')} ماكينة` : 'رفع ملف الأرقام'}
+              </p>
+            </div>
+
+            {currentTab === 1 && (
+              <div className="absolute bottom-0 left-0 right-0 h-1 bg-white/70 rounded-full mx-3 mb-0.5" />
+            )}
           </button>
+
+          {/* Card 2: Sheet 2 */}
           <button
             onClick={() => setCurrentTab(2)}
-            className={`flex-1 py-2 px-3 rounded-xl font-bold text-xs whitespace-nowrap transition-all cursor-pointer ${
+            className={`p-3 sm:p-3.5 rounded-2xl border text-right transition-all duration-200 flex flex-col justify-between gap-2.5 cursor-pointer group relative overflow-hidden ${
               currentTab === 2
-                ? 'bg-indigo-600 text-white shadow-sm'
-                : 'text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800'
+                ? 'bg-indigo-600 border-indigo-400 text-white shadow-lg shadow-indigo-600/30 ring-2 ring-indigo-400/40'
+                : 'bg-white dark:bg-[#0a0f1d] border-slate-200 dark:border-slate-800 text-slate-700 dark:text-slate-300 hover:border-indigo-400/60 hover:bg-slate-50 dark:hover:bg-[#0e1628]'
             }`}
           >
-            2. شيت ربط المناديب والحسابات
+            <div className="flex items-center justify-between w-full">
+              <span
+                className={`text-[10px] font-mono font-black px-2 py-0.5 rounded-md ${
+                  currentTab === 2
+                    ? 'bg-white/20 text-white'
+                    : 'bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-400'
+                }`}
+              >
+                02
+              </span>
+              <div
+                className={`w-7 h-7 rounded-xl flex items-center justify-center transition-colors ${
+                  currentTab === 2
+                    ? 'bg-white/20 text-white'
+                    : 'bg-blue-500/10 text-blue-500 dark:text-blue-400 group-hover:bg-blue-500/20'
+                }`}
+              >
+                <Users className="w-4 h-4" />
+              </div>
+            </div>
+
+            <div>
+              <h4
+                className={`text-xs font-bold leading-tight ${
+                  currentTab === 2 ? 'text-white' : 'text-slate-900 dark:text-white'
+                }`}
+              >
+                2. شيت المناديب
+              </h4>
+              <p
+                className={`text-[10px] mt-1 font-medium truncate ${
+                  currentTab === 2 ? 'text-indigo-100 font-bold' : 'text-slate-500 dark:text-slate-400'
+                }`}
+              >
+                {sheet2.length > 0 ? `${sheet2.length.toLocaleString('ar-EG')} سجل توزيع` : 'ربط الحسابات'}
+              </p>
+            </div>
+
+            {currentTab === 2 && (
+              <div className="absolute bottom-0 left-0 right-0 h-1 bg-white/70 rounded-full mx-3 mb-0.5" />
+            )}
           </button>
+
+          {/* Card 3: Mapping */}
           <button
             onClick={() => setCurrentTab(3)}
-            className={`flex-1 py-2 px-3 rounded-xl font-bold text-xs whitespace-nowrap transition-all cursor-pointer ${
+            className={`p-3 sm:p-3.5 rounded-2xl border text-right transition-all duration-200 flex flex-col justify-between gap-2.5 cursor-pointer group relative overflow-hidden ${
               currentTab === 3
-                ? 'bg-indigo-600 text-white shadow-sm'
-                : 'text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800'
+                ? 'bg-indigo-600 border-indigo-400 text-white shadow-lg shadow-indigo-600/30 ring-2 ring-indigo-400/40'
+                : 'bg-white dark:bg-[#0a0f1d] border-slate-200 dark:border-slate-800 text-slate-700 dark:text-slate-300 hover:border-indigo-400/60 hover:bg-slate-50 dark:hover:bg-[#0e1628]'
             }`}
           >
-            3. تعيين أعمدة الربط والحسابات
+            <div className="flex items-center justify-between w-full">
+              <span
+                className={`text-[10px] font-mono font-black px-2 py-0.5 rounded-md ${
+                  currentTab === 3
+                    ? 'bg-white/20 text-white'
+                    : 'bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-400'
+                }`}
+              >
+                03
+              </span>
+              <div
+                className={`w-7 h-7 rounded-xl flex items-center justify-center transition-colors ${
+                  currentTab === 3
+                    ? 'bg-white/20 text-white'
+                    : 'bg-amber-500/10 text-amber-500 dark:text-amber-400 group-hover:bg-amber-500/20'
+                }`}
+              >
+                <Sliders className="w-4 h-4" />
+              </div>
+            </div>
+
+            <div>
+              <h4
+                className={`text-xs font-bold leading-tight ${
+                  currentTab === 3 ? 'text-white' : 'text-slate-900 dark:text-white'
+                }`}
+              >
+                3. تعيين الأعمدة
+              </h4>
+              <p
+                className={`text-[10px] mt-1 font-medium truncate ${
+                  currentTab === 3 ? 'text-indigo-100 font-bold' : 'text-slate-500 dark:text-slate-400'
+                }`}
+              >
+                {colM1 && colM2 ? 'أعمدة الربط محددة' : 'ضبط ومطابقة الأعمدة'}
+              </p>
+            </div>
+
+            {currentTab === 3 && (
+              <div className="absolute bottom-0 left-0 right-0 h-1 bg-white/70 rounded-full mx-3 mb-0.5" />
+            )}
           </button>
+
+          {/* Card 4: Reports */}
           <button
             onClick={() => setCurrentTab(4)}
-            className={`flex-1 py-2 px-3 rounded-xl font-bold text-xs whitespace-nowrap transition-all cursor-pointer ${
+            className={`p-3 sm:p-3.5 rounded-2xl border text-right transition-all duration-200 flex flex-col justify-between gap-2.5 cursor-pointer group relative overflow-hidden ${
               currentTab === 4
-                ? 'bg-indigo-600 text-white shadow-sm'
-                : 'text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800'
+                ? 'bg-indigo-600 border-indigo-400 text-white shadow-lg shadow-indigo-600/30 ring-2 ring-indigo-400/40'
+                : 'bg-white dark:bg-[#0a0f1d] border-slate-200 dark:border-slate-800 text-slate-700 dark:text-slate-300 hover:border-indigo-400/60 hover:bg-slate-50 dark:hover:bg-[#0e1628]'
             }`}
           >
-            4. تقرير أسطر الماكينات والمناديب ({expandedRows.length} سطر)
+            <div className="flex items-center justify-between w-full">
+              <span
+                className={`text-[10px] font-mono font-black px-2 py-0.5 rounded-md ${
+                  currentTab === 4
+                    ? 'bg-white/20 text-white'
+                    : 'bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-400'
+                }`}
+              >
+                04
+              </span>
+              <div
+                className={`w-7 h-7 rounded-xl flex items-center justify-center transition-colors ${
+                  currentTab === 4
+                    ? 'bg-white/20 text-white'
+                    : 'bg-indigo-500/10 text-indigo-500 dark:text-indigo-400 group-hover:bg-indigo-500/20'
+                }`}
+              >
+                <Layers className="w-4 h-4" />
+              </div>
+            </div>
+
+            <div>
+              <h4
+                className={`text-xs font-bold leading-tight ${
+                  currentTab === 4 ? 'text-white' : 'text-slate-900 dark:text-white'
+                }`}
+              >
+                4. تقرير الأسطر
+              </h4>
+              <p
+                className={`text-[10px] mt-1 font-mono font-bold truncate ${
+                  currentTab === 4 ? 'text-indigo-100' : 'text-indigo-600 dark:text-indigo-400'
+                }`}
+              >
+                {expandedRows.length.toLocaleString('ar-EG')} سطر مفصل
+              </p>
+            </div>
+
+            {currentTab === 4 && (
+              <div className="absolute bottom-0 left-0 right-0 h-1 bg-white/70 rounded-full mx-3 mb-0.5" />
+            )}
           </button>
+
+          {/* Card 5: Audit & Conflicts */}
           <button
             onClick={() => setCurrentTab(5)}
-            className={`flex-1 py-2 px-3 rounded-xl font-bold text-xs whitespace-nowrap transition-all flex items-center justify-center gap-1.5 cursor-pointer ${
+            className={`p-3 sm:p-3.5 rounded-2xl border text-right transition-all duration-200 flex flex-col justify-between gap-2.5 cursor-pointer group relative overflow-hidden ${
               currentTab === 5
-                ? 'bg-amber-600 text-white shadow-sm'
-                : 'text-amber-600 dark:text-amber-400 hover:bg-slate-100 dark:hover:bg-slate-800'
+                ? 'bg-amber-600 border-amber-400 text-white shadow-lg shadow-amber-600/30 ring-2 ring-amber-400/40'
+                : 'bg-white dark:bg-[#0a0f1d] border-slate-200 dark:border-slate-800 text-slate-700 dark:text-slate-300 hover:border-amber-400/60 hover:bg-slate-50 dark:hover:bg-[#0e1628]'
             }`}
           >
-            <CircleAlert className="w-3.5 h-3.5 text-amber-500" />
-            <span>5. فحص النزاعات والحالات الشاذة ({duplicates.length + irregulars.length})</span>
+            <div className="flex items-center justify-between w-full">
+              <span
+                className={`text-[10px] font-mono font-black px-2 py-0.5 rounded-md ${
+                  currentTab === 5
+                    ? 'bg-white/20 text-white'
+                    : 'bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-400'
+                }`}
+              >
+                05
+              </span>
+              <div
+                className={`w-7 h-7 rounded-xl flex items-center justify-center transition-colors ${
+                  currentTab === 5
+                    ? 'bg-white/20 text-white'
+                    : 'bg-amber-500/10 text-amber-500 dark:text-amber-400 group-hover:bg-amber-500/20'
+                }`}
+              >
+                <CircleAlert className="w-4 h-4" />
+              </div>
+            </div>
+
+            <div>
+              <h4
+                className={`text-xs font-bold leading-tight ${
+                  currentTab === 5 ? 'text-white' : 'text-amber-600 dark:text-amber-400'
+                }`}
+              >
+                5. فحص النزاعات
+              </h4>
+              <p
+                className={`text-[10px] mt-1 font-mono font-bold truncate ${
+                  currentTab === 5 ? 'text-amber-100' : 'text-slate-500 dark:text-slate-400'
+                }`}
+              >
+                {duplicates.length + irregulars.length > 0
+                  ? `${(duplicates.length + irregulars.length).toLocaleString('ar-EG')} شاذ / مكرر`
+                  : 'فحص سليم (0)'}
+              </p>
+            </div>
+
+            {currentTab === 5 && (
+              <div className="absolute bottom-0 left-0 right-0 h-1 bg-white/70 rounded-full mx-3 mb-0.5" />
+            )}
           </button>
+
+          {/* Card 6: Desktop App Studio */}
           <button
             onClick={() => setCurrentTab(6)}
-            className={`flex-1 py-2 px-3 rounded-xl font-bold text-xs whitespace-nowrap transition-all flex items-center justify-center gap-1.5 cursor-pointer ${
+            className={`p-3 sm:p-3.5 rounded-2xl border text-right transition-all duration-200 flex flex-col justify-between gap-2.5 cursor-pointer group relative overflow-hidden ${
               currentTab === 6
-                ? 'bg-blue-600 text-white shadow-sm'
-                : 'text-blue-600 dark:text-blue-400 hover:bg-blue-50 dark:hover:bg-slate-800'
+                ? 'bg-blue-600 border-blue-400 text-white shadow-lg shadow-blue-600/30 ring-2 ring-blue-400/40'
+                : 'bg-white dark:bg-[#0a0f1d] border-slate-200 dark:border-slate-800 text-slate-700 dark:text-slate-300 hover:border-blue-400/60 hover:bg-slate-50 dark:hover:bg-[#0e1628]'
             }`}
           >
-            <FileCode className="w-3.5 h-3.5 text-blue-500" />
-            <span>6. استوديو كود الـ HTML وتحديث الديسكتوب</span>
-            <span className="px-1.5 py-0.5 rounded-md text-[9px] font-bold bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 flex items-center gap-1">
-              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-              <span>Live Update</span>
-            </span>
+            <div className="flex items-center justify-between w-full">
+              <span
+                className={`text-[10px] font-mono font-black px-2 py-0.5 rounded-md ${
+                  currentTab === 6
+                    ? 'bg-white/20 text-white'
+                    : 'bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-400'
+                }`}
+              >
+                06
+              </span>
+              <div
+                className={`w-7 h-7 rounded-xl flex items-center justify-center transition-colors ${
+                  currentTab === 6
+                    ? 'bg-white/20 text-white'
+                    : 'bg-blue-500/10 text-blue-500 dark:text-blue-400 group-hover:bg-blue-500/20'
+                }`}
+              >
+                <FileCode className="w-4 h-4" />
+              </div>
+            </div>
+
+            <div>
+              <div className="flex items-center justify-between gap-1">
+                <h4
+                  className={`text-xs font-bold leading-tight ${
+                    currentTab === 6 ? 'text-white' : 'text-slate-900 dark:text-white'
+                  }`}
+                >
+                  6. استوديو HTML
+                </h4>
+                <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse shrink-0" title="Live Update" />
+              </div>
+              <p
+                className={`text-[10px] mt-1 font-medium truncate ${
+                  currentTab === 6 ? 'text-blue-100 font-bold' : 'text-slate-500 dark:text-slate-400'
+                }`}
+              >
+                تحديث أوفلاين
+              </p>
+            </div>
+
+            {currentTab === 6 && (
+              <div className="absolute bottom-0 left-0 right-0 h-1 bg-white/70 rounded-full mx-3 mb-0.5" />
+            )}
           </button>
         </div>
 
@@ -1187,6 +1505,8 @@ export default function App() {
             </div>
           </div>
         )}
+
+
 
         {/* TAB 3: Column Mapping */}
         {currentTab === 3 && (
@@ -1617,287 +1937,316 @@ export default function App() {
                       <p className="text-xs">ارفع الشيتات أو اختر «عينة فورية» لتوليد البطاقات تلقائياً.</p>
                     </div>
                   ) : (
-                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-                      {displayedSlice.map((item, idx) => {
-                        const globalIdx = (currentPage - 1) * pageSize + idx + 1;
-                        const isSelected = selectedMachines.has(item.machine);
+                    <div
+                      ref={cardsContainerRef}
+                      onScroll={(e) => setCardsScrollTop(e.currentTarget.scrollTop)}
+                      className="max-h-[550px] overflow-y-auto pr-1"
+                    >
+                      <div
+                        style={{
+                          paddingTop: cardsVirtualState.topPadding,
+                          paddingBottom: cardsVirtualState.bottomPadding,
+                        }}
+                      >
+                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+                          {displayedSlice.slice(cardsVirtualState.startIndex, cardsVirtualState.endIndex).map((item, idx) => {
+                            const globalIdx = (currentPage - 1) * pageSize + cardsVirtualState.startIndex + idx + 1;
+                            const isSelected = selectedMachines.has(item.machine);
 
-                        return (
-                          <div
-                            key={item.id}
-                            className={`p-4 rounded-3xl border-2 transition-all shadow-md flex flex-col justify-between gap-3 relative overflow-hidden group ${
-                              item.status === 'multi'
-                                ? 'bg-amber-950/10 dark:bg-slate-900 border-amber-500/40 hover:border-amber-400'
-                                : item.status === 'single'
-                                ? 'bg-emerald-950/10 dark:bg-slate-900 border-emerald-500/40 hover:border-emerald-400'
-                                : 'bg-rose-950/10 dark:bg-slate-900 border-rose-500/40 hover:border-rose-400'
-                            }`}
-                          >
-                            {/* Card Header Box */}
-                            <div className="flex items-center justify-between pb-2.5 border-b border-slate-200 dark:border-slate-800">
-                              <div className="flex items-center gap-2">
-                                <input
-                                  type="checkbox"
-                                  className="rounded border-slate-300 text-indigo-600 focus:ring-0 cursor-pointer"
-                                  checked={isSelected}
-                                  onChange={() => handleToggleSelectRow(item.machine)}
-                                />
-                                <div>
-                                  <span className="font-mono font-black text-slate-900 dark:text-white text-base block leading-none">
-                                    {item.machine}
-                                  </span>
-                                  <span className="text-[10px] text-slate-400 font-mono mt-1 block">
-                                    بطاقة ماكينة #{globalIdx}
-                                  </span>
-                                </div>
-                              </div>
-                              <span
-                                className={`px-2 py-1 rounded-xl text-[10px] font-black border ${
-                                  item.status === 'single'
-                                    ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30'
-                                    : item.status === 'multi'
-                                    ? 'bg-amber-500/20 text-amber-400 border-amber-500/30'
-                                    : 'bg-rose-500/20 text-rose-400 border-rose-500/30'
+                            return (
+                              <div
+                                key={item.id}
+                                className={`p-4 rounded-3xl border-2 transition-all shadow-md flex flex-col justify-between gap-3 relative overflow-hidden group ${
+                                  item.status === 'multi'
+                                    ? 'bg-amber-950/10 dark:bg-slate-900 border-amber-500/40 hover:border-amber-400'
+                                    : item.status === 'single'
+                                    ? 'bg-emerald-950/10 dark:bg-slate-900 border-emerald-500/40 hover:border-emerald-400'
+                                    : 'bg-rose-950/10 dark:bg-slate-900 border-rose-500/40 hover:border-rose-400'
                                 }`}
                               >
-                                {item.status === 'single'
-                                  ? 'مندوب واحد (1/1)'
-                                  : item.status === 'multi'
-                                  ? `مشتركة (${item.repOrder}/${item.totalRepsForMachine})`
-                                  : 'شاغرة'}
-                              </span>
-                            </div>
+                                {/* Card Header Box */}
+                                <div className="flex items-center justify-between pb-2.5 border-b border-slate-200 dark:border-slate-800">
+                                  <div className="flex items-center gap-2">
+                                    <input
+                                      type="checkbox"
+                                      className="rounded border-slate-300 text-indigo-600 focus:ring-0 cursor-pointer"
+                                      checked={isSelected}
+                                      onChange={() => handleToggleSelectRow(item.machine)}
+                                    />
+                                    <div>
+                                      <span className="font-mono font-black text-slate-900 dark:text-white text-base block leading-none">
+                                        {item.machine}
+                                      </span>
+                                      <span className="text-[10px] text-slate-400 font-mono mt-1 block">
+                                        بطاقة ماكينة #{globalIdx}
+                                      </span>
+                                    </div>
+                                  </div>
+                                  <span
+                                    className={`px-2 py-1 rounded-xl text-[10px] font-black border ${
+                                      item.status === 'single'
+                                        ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30'
+                                        : item.status === 'multi'
+                                        ? 'bg-amber-500/20 text-amber-400 border-amber-500/30'
+                                        : 'bg-rose-500/20 text-rose-400 border-rose-500/30'
+                                    }`}
+                                  >
+                                    {item.status === 'single'
+                                      ? 'مندوب واحد (1/1)'
+                                      : item.status === 'multi'
+                                      ? `مشتركة (${item.repOrder}/${item.totalRepsForMachine})`
+                                      : 'شاغرة'}
+                                  </span>
+                                </div>
 
-                            {/* Rep Sub-Card Box */}
-                            <div className="p-3 rounded-2xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700/60 space-y-2">
-                              <div className="flex items-center justify-between text-xs">
-                                <span className="text-slate-500 dark:text-slate-400 font-bold text-[10px]">
-                                  بيانات المندوب:
-                                </span>
-                                {item.account !== 'غير متوفر' ? (
+                                {/* Rep Sub-Card Box */}
+                                <div className="p-3 rounded-2xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700/60 space-y-2">
+                                  <div className="flex items-center justify-between text-xs">
+                                    <span className="text-slate-500 dark:text-slate-400 font-bold text-[10px]">
+                                      بيانات المندوب:
+                                    </span>
+                                    {item.account !== 'غير متوفر' ? (
+                                      <button
+                                        onClick={() => {
+                                          setRepLookupQuery(item.account);
+                                          setIsRepLookupOpen(true);
+                                        }}
+                                        className="font-mono text-xs font-black px-2 py-0.5 rounded-md bg-indigo-600/20 text-indigo-400 border border-indigo-500/30 hover:bg-indigo-600 hover:text-white transition-all cursor-pointer"
+                                        title="اضغط لاستعلام كافة ماكينات هذا المندوب"
+                                      >
+                                        حساب: {item.account}
+                                      </button>
+                                    ) : (
+                                      <span className="text-[10px] text-slate-400 font-mono">بدون كود</span>
+                                    )}
+                                  </div>
+
+                                  <div className="flex items-center gap-2">
+                                    <div className="w-8 h-8 rounded-xl bg-indigo-500/20 text-indigo-400 flex items-center justify-center font-bold text-xs shrink-0">
+                                      <UserCheck className="w-4 h-4" />
+                                    </div>
+                                    <div className="min-w-0 flex-1">
+                                      <p className="font-black text-xs sm:text-sm text-slate-900 dark:text-white truncate">
+                                        {item.repName || 'لا يوجد مندوب'}
+                                      </p>
+                                      {item.isMissingRepName && (
+                                        <span className="text-[10px] text-amber-500 font-bold block">
+                                          ⚠️ الاسم غير مدون بالشيت
+                                        </span>
+                                      )}
+                                    </div>
+                                  </div>
+                                </div>
+
+                                {/* Card Footer Actions */}
+                                <div className="pt-2 flex items-center justify-between text-[11px] border-t border-slate-100 dark:border-slate-800">
+                                  <span className="text-slate-400 text-[10px]">
+                                    {item.status === 'multi'
+                                      ? `مندوب رقم ${item.repOrder} من ${item.totalRepsForMachine}`
+                                      : 'ماكينة فردية'}
+                                  </span>
                                   <button
                                     onClick={() => {
-                                      setRepLookupQuery(item.account);
+                                      setRepLookupQuery(
+                                        item.account !== 'غير متوفر' ? item.account : item.repName
+                                      );
                                       setIsRepLookupOpen(true);
                                     }}
-                                    className="font-mono text-xs font-black px-2 py-0.5 rounded-md bg-indigo-600/20 text-indigo-400 border border-indigo-500/30 hover:bg-indigo-600 hover:text-white transition-all cursor-pointer"
-                                    title="اضغط لاستعلام كافة ماكينات هذا المندوب"
+                                    className="text-xs font-bold text-indigo-500 hover:text-indigo-400 flex items-center gap-1 cursor-pointer"
                                   >
-                                    حساب: {item.account}
+                                    <span>كشف المندوب</span>
+                                    <ChevronLeft className="w-3.5 h-3.5" />
                                   </button>
-                                ) : (
-                                  <span className="text-[10px] text-slate-400 font-mono">بدون كود</span>
-                                )}
-                              </div>
-
-                              <div className="flex items-center gap-2">
-                                <div className="w-8 h-8 rounded-xl bg-indigo-500/20 text-indigo-400 flex items-center justify-center font-bold text-xs shrink-0">
-                                  <UserCheck className="w-4 h-4" />
-                                </div>
-                                <div className="min-w-0 flex-1">
-                                  <p className="font-black text-xs sm:text-sm text-slate-900 dark:text-white truncate">
-                                    {item.repName || 'لا يوجد مندوب'}
-                                  </p>
-                                  {item.isMissingRepName && (
-                                    <span className="text-[10px] text-amber-500 font-bold block">
-                                      ⚠️ الاسم غير مدون بالشيت
-                                    </span>
-                                  )}
                                 </div>
                               </div>
-                            </div>
-
-                            {/* Card Footer Actions */}
-                            <div className="pt-2 flex items-center justify-between text-[11px] border-t border-slate-100 dark:border-slate-800">
-                              <span className="text-slate-400 text-[10px]">
-                                {item.status === 'multi'
-                                  ? `مندوب رقم ${item.repOrder} من ${item.totalRepsForMachine}`
-                                  : 'ماكينة فردية'}
-                              </span>
-                              <button
-                                onClick={() => {
-                                  setRepLookupQuery(
-                                    item.account !== 'غير متوفر' ? item.account : item.repName
-                                  );
-                                  setIsRepLookupOpen(true);
-                                }}
-                                className="text-xs font-bold text-indigo-500 hover:text-indigo-400 flex items-center gap-1 cursor-pointer"
-                              >
-                                <span>كشف المندوب</span>
-                                <ChevronLeft className="w-3.5 h-3.5" />
-                              </button>
-                            </div>
-                          </div>
-                        );
-                      })}
+                            );
+                          })}
+                        </div>
+                      </div>
                     </div>
                   )}
                 </div>
               ) : (
                 /* Table View */
-                <div className="overflow-x-auto border border-slate-800/90 rounded-2xl bg-slate-900/80 backdrop-blur-md shadow-2xl">
-                <table className="w-full text-right border-collapse text-xs">
-                  <thead className="bg-slate-900/95 text-slate-400 font-bold border-b border-slate-800">
-                    <tr>
-                      <th className="p-3.5 w-12 text-center">
-                        <input
-                          type="checkbox"
-                          className="w-4 h-4 rounded border-slate-700 bg-slate-800 text-indigo-600 focus:ring-0 cursor-pointer"
-                          checked={
-                            displayedSlice.length > 0 &&
-                            displayedSlice.every((r) => selectedMachines.has(r.machine))
-                          }
-                          onChange={(e) => handleToggleSelectAll(e.target.checked)}
-                          title="تحديد الكل المعروض"
-                        />
-                      </th>
-                      <th className="p-3.5 w-14 text-center font-mono">م</th>
-                      <th className="p-3.5 w-48">رقم الماكينة</th>
-                      <th className="p-3.5 w-40">رقم حساب المندوب</th>
-                      <th className="p-3.5">اسم المندوب المسند</th>
-                      <th className="p-3.5 w-48 text-center">ترتيب المندوب للماكينة</th>
-                      <th className="p-3.5 w-40 text-center">حالة الماكينة</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-800/80 text-slate-300">
-                    {displayedSlice.length === 0 ? (
+                <div
+                  ref={tableContainerRef}
+                  onScroll={(e) => setTableScrollTop(e.currentTarget.scrollTop)}
+                  className="max-h-[550px] overflow-y-auto border border-slate-800/90 rounded-2xl bg-slate-900/80 backdrop-blur-md shadow-2xl relative"
+                >
+                  <table className="w-full text-right border-collapse text-xs">
+                    <thead className="bg-[#0a0f1d] text-slate-400 font-bold border-b border-slate-800 sticky top-0 z-20 shadow-md">
                       <tr>
-                        <td colSpan={7} className="p-8 text-center text-slate-400">
-                          لا توجد نتائج تطابق شرط البحث أو الفلتر. ارفع الشيتات أو اختر «عينة فورية».
-                        </td>
+                        <th className="p-3.5 w-12 text-center">
+                          <input
+                            type="checkbox"
+                            className="w-4 h-4 rounded border-slate-700 bg-slate-800 text-indigo-600 focus:ring-0 cursor-pointer"
+                            checked={
+                              displayedSlice.length > 0 &&
+                              displayedSlice.every((r) => selectedMachines.has(r.machine))
+                            }
+                            onChange={(e) => handleToggleSelectAll(e.target.checked)}
+                            title="تحديد الكل المعروض"
+                          />
+                        </th>
+                        <th className="p-3.5 w-14 text-center font-mono">م</th>
+                        <th className="p-3.5 w-48">رقم الماكينة</th>
+                        <th className="p-3.5 w-40">رقم حساب المندوب</th>
+                        <th className="p-3.5">اسم المندوب المسند</th>
+                        <th className="p-3.5 w-48 text-center">ترتيب المندوب للماكينة</th>
+                        <th className="p-3.5 w-40 text-center">حالة الماكينة</th>
                       </tr>
-                    ) : (
-                      displayedSlice.map((item, idx) => {
-                        const globalIdx = (currentPage - 1) * pageSize + idx + 1;
-                        const isSelected = selectedMachines.has(item.machine);
-                        const isChildRow = item.status === 'multi' && item.repOrder > 1;
+                    </thead>
+                    <tbody className="divide-y divide-slate-800/80 text-slate-300">
+                      {displayedSlice.length === 0 ? (
+                        <tr>
+                          <td colSpan={7} className="p-8 text-center text-slate-400">
+                            لا توجد نتائج تطابق شرط البحث أو الفلتر. ارفع الشيتات أو اختر «عينة فورية».
+                          </td>
+                        </tr>
+                      ) : (
+                        <>
+                          {tableVirtualState.topPadding > 0 && (
+                            <tr style={{ border: 'none' }}>
+                              <td colSpan={7} style={{ height: tableVirtualState.topPadding, padding: 0, border: 'none' }} />
+                            </tr>
+                          )}
+                          {displayedSlice.slice(tableVirtualState.startIndex, tableVirtualState.endIndex).map((item, idx) => {
+                            const globalIdx = (currentPage - 1) * pageSize + tableVirtualState.startIndex + idx + 1;
+                            const isSelected = selectedMachines.has(item.machine);
+                            const isChildRow = item.status === 'multi' && item.repOrder > 1;
 
-                        const rowClass = isChildRow
-                          ? 'bg-slate-950/60 hover:bg-slate-800/40 transition-colors'
-                          : 'hover:bg-slate-800/50 transition-colors';
+                            const rowClass = isChildRow
+                              ? 'bg-slate-950/60 hover:bg-slate-800/40 transition-colors'
+                              : 'hover:bg-slate-800/50 transition-colors';
 
-                        return (
-                          <tr key={item.id} className={rowClass}>
-                            <td className="p-3.5 text-center">
-                              <input
-                                type="checkbox"
-                                className="w-4 h-4 rounded border-slate-700 bg-slate-800 text-indigo-600 cursor-pointer"
-                                checked={isSelected}
-                                onChange={() => handleToggleSelectRow(item.machine)}
-                              />
-                            </td>
-                            <td className="p-3.5 text-center text-slate-500 font-mono font-bold">
-                              {globalIdx}
-                            </td>
+                            return (
+                              <tr key={item.id} className={rowClass} style={{ height: tableRowHeight }}>
+                                <td className="p-3.5 text-center">
+                                  <input
+                                    type="checkbox"
+                                    className="w-4 h-4 rounded border-slate-700 bg-slate-800 text-indigo-600 cursor-pointer"
+                                    checked={isSelected}
+                                    onChange={() => handleToggleSelectRow(item.machine)}
+                                  />
+                                </td>
+                                <td className="p-3.5 text-center text-slate-500 font-mono font-bold">
+                                  {globalIdx}
+                                </td>
 
-                            {/* Machine Column */}
-                            <td className="p-3.5">
-                              {isChildRow ? (
-                                <div className="flex items-center gap-2 font-mono font-bold text-slate-300 pr-3 border-r-2 border-indigo-500/50">
-                                  <ArrowDown className="w-3.5 h-3.5 text-indigo-400" />
-                                  <span className="tracking-wide">{item.machine}</span>
-                                  <span className="text-[10px] text-slate-400 font-sans font-normal px-1.5 py-0.5 rounded bg-slate-800/80 border border-slate-700/50">
-                                    (تابع)
-                                  </span>
-                                </div>
-                              ) : (
-                                <span className="font-mono font-black text-white text-sm tracking-wide">
-                                  {item.machine}
-                                </span>
-                              )}
-                            </td>
+                                {/* Machine Column */}
+                                <td className="p-3.5">
+                                  {isChildRow ? (
+                                    <div className="flex items-center gap-2 font-mono font-bold text-slate-300 pr-3 border-r-2 border-indigo-500/50">
+                                      <ArrowDown className="w-3.5 h-3.5 text-indigo-400" />
+                                      <span className="tracking-wide">{item.machine}</span>
+                                      <span className="text-[10px] text-slate-400 font-sans font-normal px-1.5 py-0.5 rounded bg-slate-800/80 border border-slate-700/50">
+                                        (تابع)
+                                      </span>
+                                    </div>
+                                  ) : (
+                                    <span className="font-mono font-black text-white text-sm tracking-wide">
+                                      {item.machine}
+                                    </span>
+                                  )}
+                                </td>
 
-                            {/* Account Column */}
-                            <td className="p-3.5">
-                              {item.account === 'غير متوفر' ? (
-                                <span className="text-slate-500 font-mono text-xs">غير متوفر</span>
-                              ) : (
-                                <button
-                                  onClick={() => {
-                                    setRepLookupQuery(item.account);
-                                    setIsRepLookupOpen(true);
-                                  }}
-                                  className="font-mono text-xs font-bold px-3 py-1 rounded-lg bg-blue-950/60 text-blue-400 border border-blue-500/30 hover:bg-blue-900/60 transition-colors cursor-pointer"
-                                  title="اضغط لمعاينة كافة ماكينات هذا المندوب وتصدير كشف خاص به"
-                                >
-                                  {item.account}
-                                </button>
-                              )}
-                            </td>
+                                {/* Account Column */}
+                                <td className="p-3.5">
+                                  {item.account === 'غير متوفر' ? (
+                                    <span className="text-slate-500 font-mono text-xs">غير متوفر</span>
+                                  ) : (
+                                    <button
+                                      onClick={() => {
+                                        setRepLookupQuery(item.account);
+                                        setIsRepLookupOpen(true);
+                                      }}
+                                      className="font-mono text-xs font-bold px-3 py-1 rounded-lg bg-blue-950/60 text-blue-400 border border-blue-500/30 hover:bg-blue-900/60 transition-colors cursor-pointer"
+                                      title="اضغط لمعاينة كافة ماكينات هذا المندوب وتصدير كشف خاص به"
+                                    >
+                                      {item.account}
+                                    </button>
+                                  )}
+                                </td>
 
-                            {/* Rep Name Column */}
-                            <td className="p-3.5">
-                              {item.status === 'none' || item.isMissingRepName ? (
-                                <div className="flex items-center gap-2.5">
-                                  <div className="w-7 h-7 rounded-full bg-slate-800 border border-slate-700/60 text-rose-400 flex items-center justify-center text-xs shadow-inner">
-                                    <UserX className="w-3.5 h-3.5" />
-                                  </div>
-                                  <span className="text-xs font-bold text-rose-400">
-                                    {item.repName || 'لا يوجد مندوب مسند'}
-                                  </span>
-                                </div>
-                              ) : (
-                                <button
-                                  onClick={() => {
-                                    setRepLookupQuery(item.account !== 'غير متوفر' ? item.account : item.repName);
-                                    setIsRepLookupOpen(true);
-                                  }}
-                                  className="flex items-center gap-2.5 hover:opacity-80 transition-opacity cursor-pointer group text-right"
-                                  title="اضغط لمعاينة كافة ماكينات هذا المندوب"
-                                >
-                                  <div className="w-7 h-7 rounded-full bg-slate-800 border border-slate-700/60 text-blue-400 flex items-center justify-center text-xs shadow-inner group-hover:bg-blue-600 group-hover:text-white transition-colors">
-                                    <UserCheck className="w-3.5 h-3.5" />
-                                  </div>
-                                  <span className="font-bold text-white text-xs group-hover:text-blue-300 transition-colors">
-                                    {item.repName}
-                                  </span>
-                                </button>
-                              )}
-                            </td>
+                                {/* Rep Name Column */}
+                                <td className="p-3.5">
+                                  {item.status === 'none' || item.isMissingRepName ? (
+                                    <div className="flex items-center gap-2.5">
+                                      <div className="w-7 h-7 rounded-full bg-slate-800 border border-slate-700/60 text-rose-400 flex items-center justify-center text-xs shadow-inner">
+                                        <UserX className="w-3.5 h-3.5" />
+                                      </div>
+                                      <span className="text-xs font-bold text-rose-400">
+                                        {item.repName || 'لا يوجد مندوب مسند'}
+                                      </span>
+                                    </div>
+                                  ) : (
+                                    <button
+                                      onClick={() => {
+                                        setRepLookupQuery(item.account !== 'غير متوفر' ? item.account : item.repName);
+                                        setIsRepLookupOpen(true);
+                                      }}
+                                      className="flex items-center gap-2.5 hover:opacity-80 transition-opacity cursor-pointer group text-right"
+                                      title="اضغط لمعاينة كافة ماكينات هذا المندوب"
+                                    >
+                                      <div className="w-7 h-7 rounded-full bg-slate-800 border border-slate-700/60 text-blue-400 flex items-center justify-center text-xs shadow-inner group-hover:bg-blue-600 group-hover:text-white transition-colors">
+                                        <UserCheck className="w-3.5 h-3.5" />
+                                      </div>
+                                      <span className="font-bold text-white text-xs group-hover:text-blue-300 transition-colors">
+                                        {item.repName}
+                                      </span>
+                                    </button>
+                                  )}
+                                </td>
 
-                            {/* Rep Order Column */}
-                            <td className="p-3.5 text-center">
-                              {item.status === 'none' ? (
-                                <span className="text-xs text-slate-500 font-bold">-</span>
-                              ) : item.status === 'single' ? (
-                                <span className="inline-flex items-center px-3 py-1 rounded-full text-[11px] font-bold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
-                                  مندوب رئيسي (1 من 1)
-                                </span>
-                              ) : item.repOrder === 1 ? (
-                                <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[11px] font-bold bg-amber-500/10 text-amber-400 border border-amber-500/20">
-                                  المندوب الأول (1 من {item.totalRepsForMachine})
-                                </span>
-                              ) : (
-                                <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[11px] font-bold bg-slate-800 text-slate-300 border border-slate-700/60">
-                                  مندوب إضافي ({item.repOrder} من {item.totalRepsForMachine})
-                                </span>
-                              )}
-                            </td>
+                                {/* Rep Order Column */}
+                                <td className="p-3.5 text-center">
+                                  {item.status === 'none' ? (
+                                    <span className="text-xs text-slate-500 font-bold">-</span>
+                                  ) : item.status === 'single' ? (
+                                    <span className="inline-flex items-center px-3 py-1 rounded-full text-[11px] font-bold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+                                      مندوب رئيسي (1 من 1)
+                                    </span>
+                                  ) : item.repOrder === 1 ? (
+                                    <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[11px] font-bold bg-amber-500/10 text-amber-400 border border-amber-500/20">
+                                      المندوب الأول (1 من {item.totalRepsForMachine})
+                                    </span>
+                                  ) : (
+                                    <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[11px] font-bold bg-slate-800 text-slate-300 border border-slate-700/60">
+                                      مندوب إضافي ({item.repOrder} من {item.totalRepsForMachine})
+                                    </span>
+                                  )}
+                                </td>
 
-                            {/* Machine Status Column */}
-                            <td className="p-3.5 text-center">
-                              {item.status === 'single' ? (
-                                <span className="inline-flex items-center px-3 py-1 rounded-lg text-[11px] font-bold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
-                                  مندوب فردي
-                                </span>
-                              ) : item.status === 'multi' ? (
-                                <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-lg text-[11px] font-bold bg-indigo-500/10 text-indigo-400 border border-indigo-500/20">
-                                  <CircleAlert className="w-3.5 h-3.5 text-indigo-400" />
-                                  <span>متعددة ({item.totalRepsForMachine} مناديب)</span>
-                                </span>
-                              ) : (
-                                <span className="inline-flex items-center gap-1 px-3 py-1 rounded-lg text-[11px] font-bold bg-rose-500/10 text-rose-400 border border-rose-500/20">
-                                  شاغرة
-                                </span>
-                              )}
-                            </td>
-                          </tr>
-                        );
-                      })
-                    )}
-                  </tbody>
-                </table>
-              </div>
+                                {/* Machine Status Column */}
+                                <td className="p-3.5 text-center">
+                                  {item.status === 'single' ? (
+                                    <span className="inline-flex items-center px-3 py-1 rounded-lg text-[11px] font-bold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+                                      مندوب فردي
+                                    </span>
+                                  ) : item.status === 'multi' ? (
+                                    <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-lg text-[11px] font-bold bg-indigo-500/10 text-indigo-400 border border-indigo-500/20">
+                                      <CircleAlert className="w-3.5 h-3.5 text-indigo-400" />
+                                      <span>متعددة ({item.totalRepsForMachine} مناديب)</span>
+                                    </span>
+                                  ) : (
+                                    <span className="inline-flex items-center gap-1 px-3 py-1 rounded-lg text-[11px] font-bold bg-rose-500/10 text-rose-400 border border-rose-500/20">
+                                      شاغرة
+                                    </span>
+                                  )}
+                                </td>
+                              </tr>
+                            );
+                          })}
+                          {tableVirtualState.bottomPadding > 0 && (
+                            <tr style={{ border: 'none' }}>
+                              <td colSpan={7} style={{ height: tableVirtualState.bottomPadding, padding: 0, border: 'none' }} />
+                            </tr>
+                          )}
+                        </>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
               )}
 
               {/* Pagination */}
