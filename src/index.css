@@ -24,6 +24,28 @@
   background: #94a3b8;
 }
 
+/* Cartoon / Neo-brutalist Styles */
+.cartoon-border {
+  border: 3px solid #0f172a !important;
+  box-shadow: 4px 4px 0px #0f172a !important;
+}
+
+.cartoon-btn {
+  border: 3px solid #0f172a !important;
+  box-shadow: 4px 4px 0px #0f172a !important;
+  transition: all 0.15s ease !important;
+}
+
+.cartoon-btn:hover {
+  transform: translate(-2px, -2px) !important;
+  box-shadow: 6px 6px 0px #0f172a !important;
+}
+
+.cartoon-btn:active {
+  transform: translate(2px, 2px) !important;
+  box-shadow: 2px 2px 0px #0f172a !important;
+}
+
 @keyframes pulseGlow {
   0%, 100% { opacity: 0.9; }
   50% { opacity: 0.4; }
