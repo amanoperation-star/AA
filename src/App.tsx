@@ -383,11 +383,11 @@ export default function App() {
 
       // Check if machine starts with 7- or matches a cash representative
       const isCashMachine = originalMachineId.startsWith('7-') || originalMachineId.startsWith('٧-') || reps.some(r => r.type === 'cash');
-      const displayMachineId = originalMachineId;
+      const cleanMachineId = normalizeMachineId(originalMachineId);
 
       summaries.push({
         index: i + 1,
-        machine: displayMachineId,
+        machine: originalMachineId,
         repCount: count,
         reps,
         status,
@@ -395,9 +395,14 @@ export default function App() {
 
       if (count === 0) {
         rowCounter++;
+        const isVacantCash = row._tabType === 'cash' || isCashMachine;
+        const vacantMachineDisplay = isVacantCash
+          ? (originalMachineId.startsWith('7-') || originalMachineId.startsWith('٧-') ? originalMachineId : `7-${cleanMachineId}`)
+          : cleanMachineId;
+
         flatRows.push({
           id: `row-${rowCounter}`,
-          machine: displayMachineId,
+          machine: vacantMachineDisplay,
           account: 'غير متوفر',
           repName: fallbackVal,
           repOrder: 0,
@@ -407,15 +412,23 @@ export default function App() {
           isFirstOfGroup: true,
           isLastOfGroup: true,
           isMissingRepName: true,
-          type: isCashMachine ? 'cash' : 'payment',
+          type: isVacantCash ? 'cash' : 'payment',
         });
       } else {
         for (let rIdx = 0; rIdx < count; rIdx++) {
           rowCounter++;
           const r = reps[rIdx];
+
+          // CRITICAL ACCURACY FIX:
+          // Payment accounts (r.type === 'payment') MUST display clean machine ID without 7- prefix
+          // Cash accounts (r.type === 'cash') MUST display machine ID with 7- prefix
+          const repMachineId = r.type === 'payment'
+            ? cleanMachineId
+            : (cleanMachineId.startsWith('7-') || cleanMachineId.startsWith('٧-') ? cleanMachineId : `7-${cleanMachineId}`);
+
           flatRows.push({
             id: `row-${rowCounter}`,
-            machine: displayMachineId,
+            machine: repMachineId,
             account: r.account,
             repName: r.name,
             repOrder: rIdx + 1,
