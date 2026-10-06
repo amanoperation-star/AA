@@ -25,6 +25,7 @@ import {
   User,
   FileCode,
   Calculator,
+  Eye,
 } from 'lucide-react';
 import { SheetRow, ExpandedRow, MachineSummary, DuplicateAuditItem, IrregularAccountItem } from './types';
 import { parseExcelFile, downloadTemplateFile, exportReconciliationToExcel } from './utils/excel';
@@ -127,6 +128,7 @@ export default function App() {
 
   // Bulk actions selection
   const [selectedMachines, setSelectedMachines] = useState<Set<string>>(new Set());
+  const [sheet1PreviewFilter, setSheet1PreviewFilter] = useState<'all' | 'cash' | 'payments'>('all');
 
   // Audits
   const [duplicates, setDuplicates] = useState<DuplicateAuditItem[]>([]);
@@ -381,9 +383,7 @@ export default function App() {
 
       // Check if machine starts with 7- or matches a cash representative
       const isCashMachine = originalMachineId.startsWith('7-') || originalMachineId.startsWith('٧-') || reps.some(r => r.type === 'cash');
-      const displayMachineId = isCashMachine 
-        ? (originalMachineId.startsWith('7-') || originalMachineId.startsWith('٧-') ? originalMachineId : `7-${originalMachineId}`)
-        : originalMachineId;
+      const displayMachineId = originalMachineId;
 
       summaries.push({
         index: i + 1,
@@ -776,39 +776,94 @@ export default function App() {
     showToast('📥 تم تصدير ملف الإكسل المفصل بنجاح!');
   };
 
-  // Automatically prepend "7-" to all machine numbers in Cash sheet (Sheet 3)
+  // Automatically prepend "7-" to all machine numbers in Cash sheet (Sheet 3) and/or Machines sheet (Sheet 1)
   const handleApplyCashPrefix = () => {
-    if (!sheet3.length) {
-      showToast('⚠️ يرجى رفع شيت الكاش أولاً لتطبيق البادئة.');
+    if (!sheet1.length && !sheet3.length) {
+      showToast('⚠️ يرجى رفع شيت الماكينات أو شيت الكاش أولاً لتطبيق البادئة.');
       return;
     }
 
-    const mCol = colM3 || Object.keys(sheet3[0])[0];
-    if (!mCol) {
-      showToast('⚠️ تعذر تحديد عمود الماكينة لتطبيق البادئة.');
-      return;
-    }
+    let modifiedCount = 0;
 
-    const updated = sheet3.map((row) => {
-      const val = row[mCol];
-      if (val !== undefined && val !== null && val !== '') {
-        const str = String(val).trim();
-        if (!str.startsWith('7-')) {
-          return {
-            ...row,
-            [mCol]: `7-${str}`,
-          };
-        }
+    // 1. Update Sheet 3 (Cash Sheet)
+    let updatedSheet3 = sheet3;
+    if (sheet3.length > 0) {
+      const mCol3 = colM3 || Object.keys(sheet3[0])[0];
+      if (mCol3) {
+        updatedSheet3 = sheet3.map((row) => {
+          const val = row[mCol3];
+          if (val !== undefined && val !== null && val !== '') {
+            const str = String(val).trim();
+            if (!str.startsWith('7-') && !str.startsWith('٧-')) {
+              modifiedCount++;
+              return {
+                ...row,
+                [mCol3]: `7-${str}`,
+              };
+            }
+          }
+          return row;
+        });
+        setSheet3(updatedSheet3);
       }
-      return row;
-    });
+    }
 
-    setSheet3(updated);
-    showToast(`✅ تم إضافة البادئة 7- لعدد ${updated.length.toLocaleString('ar-EG')} ماكينة كاش بنجاح!`);
-    
-    // Auto run reconciliation with updated data
-    if (sheet1.length > 0 && colM1) {
-      executeReconciliation(sheet1, sheet2, updated, colM1, colM2, colAcc, colRep, colM3 || mCol, colCashAcc, colCashRep, emptyRepFallback);
+    // 2. Update Sheet 1 (Machines Sheet)
+    let updatedSheet1 = sheet1;
+    if (sheet1.length > 0) {
+      const mCol1 = colM1 || Object.keys(sheet1[0])[0];
+      if (mCol1) {
+        const cashMachines = updatedSheet3.length > 0
+          ? new Set(updatedSheet3.map((r) => normalizeMachineId(String(r[colM3 || Object.keys(r)[0]]))))
+          : null;
+
+        updatedSheet1 = sheet1.map((row) => {
+          const val = row[mCol1];
+          if (val !== undefined && val !== null && val !== '') {
+            const str = String(val).trim();
+            if (!str.startsWith('7-') && !str.startsWith('٧-')) {
+              // Convert ONLY cash machines; NEVER convert payment machines
+              const isExplicitCash = row._tabType === 'cash';
+              const isExplicitPayment = row._tabType === 'payments';
+              const matchesSheet3 = cashMachines ? cashMachines.has(normalizeMachineId(str)) : false;
+
+              if (isExplicitCash || matchesSheet3 || (!cashMachines && !isExplicitPayment && row._tabType !== 'payments')) {
+                modifiedCount++;
+                return {
+                  ...row,
+                  [mCol1]: `7-${str}`,
+                };
+              }
+            }
+          }
+          return row;
+        });
+        setSheet1(updatedSheet1);
+      }
+    }
+
+    if (modifiedCount > 0) {
+      showToast(`✅ تم تحويل الماكينات وإضافة البادئة 7- بنجاح! (تم تعديل ${modifiedCount} ماكينة)`);
+    } else {
+      showToast(`✅ كافة ماكينات الكاش تحتوي بالفعل على البادئة 7-`);
+    }
+
+    // Auto run reconciliation if sheets are ready
+    if (updatedSheet1.length > 0 && (colM1 || Object.keys(updatedSheet1[0])[0])) {
+      const activeColM1 = colM1 || Object.keys(updatedSheet1[0])[0];
+      executeReconciliation(
+        updatedSheet1,
+        sheet2,
+        updatedSheet3,
+        activeColM1,
+        colM2,
+        colAcc,
+        colRep,
+        colM3,
+        colCashAcc,
+        colCashRep,
+        emptyRepFallback
+      );
     }
   };
 
@@ -857,6 +912,37 @@ export default function App() {
     setSelectedMachines(new Set());
     showToast(`✅ تم تحويل ${selectedMachines.size} ماكينة إلى شاغرة (بدون مندوب).`);
   };
+
+  // Sheet 1 Preview filters & counts
+  const cashMachinesCount = useMemo(() => {
+    return sheet1.filter((r) => {
+      const mCol = colM1 || Object.keys(r)[0];
+      const val = String(r[mCol] || '').trim();
+      return r._tabType === 'cash' || val.startsWith('7-') || val.startsWith('٧-');
+    }).length;
+  }, [sheet1, colM1]);
+
+  const payMachinesCount = useMemo(() => {
+    return Math.max(0, sheet1.length - cashMachinesCount);
+  }, [sheet1, cashMachinesCount]);
+
+  const filteredPreviewRows = useMemo(() => {
+    if (sheet1PreviewFilter === 'cash') {
+      return sheet1.filter((r) => {
+        const mCol = colM1 || Object.keys(r)[0];
+        const val = String(r[mCol] || '').trim();
+        return r._tabType === 'cash' || val.startsWith('7-') || val.startsWith('٧-');
+      });
+    }
+    if (sheet1PreviewFilter === 'payments') {
+      return sheet1.filter((r) => {
+        const mCol = colM1 || Object.keys(r)[0];
+        const val = String(r[mCol] || '').trim();
+        return r._tabType === 'payments' || (!r._tabType && !val.startsWith('7-') && !val.startsWith('٧-'));
+      });
+    }
+    return sheet1;
+  }, [sheet1, sheet1PreviewFilter, colM1]);
 
   // Filtered rows for Tab 4
   const filteredRows = useMemo(() => {
@@ -1219,7 +1305,7 @@ export default function App() {
             </div>
           </div>
 
-          {/* User's Exact Custom Slate Container: حالة الملفات المحملة */}
+          {/* User's Exact Smart Control Center: مركز المراقبة الذكي - حالة الجاهزية */}
           <motion.div
             layout
             initial={{ opacity: 0, y: 15 }}
@@ -1227,428 +1313,237 @@ export default function App() {
             transition={{ type: 'spring', stiffness: 320, damping: 26 }}
             className="lg:col-span-7 flex justify-center w-full"
           >
-            <div className="w-full max-w-xl bg-slate-900/80 border border-slate-800 rounded-2xl p-6 shadow-xl space-y-6 transition-all duration-300 backdrop-blur-sm">
+            <div className="w-full bg-[#0b1120] border border-[#1e293b] rounded-[20px] p-6 sm:p-7 shadow-[0_20px_40px_rgba(0,0,0,0.4)] grid grid-cols-1 md:grid-cols-[1fr_320px] gap-6 items-stretch">
               
-              {/* Top Bar */}
-              <div className="flex items-center justify-between pb-4 border-b border-slate-800">
-                <div className="flex items-center gap-3">
-                  {sheet1.length > 0 && sheet2.length > 0 ? (
-                    <motion.div
-                      initial={{ scale: 0 }}
-                      animate={{ scale: 1 }}
-                      transition={{ type: 'spring', stiffness: 500, damping: 20 }}
-                      className="relative flex items-center justify-center w-3.5 h-3.5"
-                    >
-                      <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
-                      <span className="relative inline-flex rounded-full h-3 w-3 bg-emerald-400 shadow-sm shadow-emerald-400/50"></span>
-                    </motion.div>
-                  ) : (
-                    <div className="w-3 h-3 rounded-full bg-amber-400 animate-pulse shadow-sm shadow-amber-400/50"></div>
-                  )}
-                  <div>
-                    <h2 className="text-base font-bold text-slate-100 flex items-center gap-2">
-                      <span>حالة الملفات المحملة</span>
-                      <AnimatePresence>
-                        {sheet1.length > 0 && sheet2.length > 0 && (
-                          <motion.span
-                            initial={{ scale: 0, opacity: 0, x: -10 }}
-                            animate={{ scale: 1, opacity: 1, x: 0 }}
-                            exit={{ scale: 0, opacity: 0 }}
-                            transition={{ type: 'spring', stiffness: 450, damping: 18 }}
-                            className="text-[11px] font-semibold text-emerald-400 bg-emerald-500/10 border border-emerald-500/30 px-2 py-0.5 rounded-full"
-                          >
-                            ✨ جاهز للمطابقة
-                          </motion.span>
-                        )}
-                      </AnimatePresence>
-                    </h2>
-                    <p className="text-xs text-slate-400 transition-colors duration-300">
-                      {sheet1.length > 0 && sheet2.length > 0
-                        ? 'الملفات جاهزة لبدء عملية المطابقة الفورية'
-                        : 'بانتظار رفع الملفات لبدء العملية'}
-                    </p>
-                  </div>
-                </div>
-
-                <AnimatePresence mode="wait">
-                  <motion.span
-                    key={2 - ((sheet1.length > 0 ? 1 : 0) + (sheet2.length > 0 ? 1 : 0))}
-                    initial={{ scale: 0.8, opacity: 0, y: -4 }}
-                    animate={{ scale: 1, opacity: 1, y: 0 }}
-                    exit={{ scale: 0.8, opacity: 0, y: 4 }}
-                    className={`text-xs px-2.5 py-1 rounded-md transition-all duration-300 border font-medium ${
-                      sheet1.length > 0 && (sheet2.length > 0 || sheet3.length > 0)
-                        ? 'bg-emerald-500/10 text-emerald-300 border-emerald-500/30 shadow-sm shadow-emerald-500/10'
-                        : 'bg-slate-800 text-slate-300 border-slate-700'
-                    }`}
-                  >
-                    {3 - ((sheet1.length > 0 ? 1 : 0) + (sheet2.length > 0 ? 1 : 0) + (sheet3.length > 0 ? 1 : 0)) === 0
-                      ? 'اكتمل رفع كافة الملفات ✅'
-                      : `${3 - ((sheet1.length > 0 ? 1 : 0) + (sheet2.length > 0 ? 1 : 0) + (sheet3.length > 0 ? 1 : 0))} ملفات متبقية`}
-                  </motion.span>
-                </AnimatePresence>
-              </div>
-
-              {/* Upload Grid */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
+              {/* Left Side: File Upload List */}
+              <div className="flex flex-col gap-4 justify-center">
                 
-                {/* Card 1 */}
-                <motion.div
-                  layout
-                  transition={{ type: 'spring', stiffness: 350, damping: 26 }}
-                  whileHover={{ y: -4, transition: { type: 'spring', stiffness: 400, damping: 20 } }}
-                  whileTap={{ scale: 0.99 }}
-                  className={`border border-dashed rounded-xl p-4 flex flex-col justify-between gap-4 transition-all duration-300 shadow-sm hover:shadow-xl group relative overflow-hidden ${
-                    sheet1.length > 0
-                      ? 'border-emerald-500/60 bg-emerald-950/20 shadow-emerald-500/5'
-                      : 'border-slate-700 hover:border-blue-500/50 bg-slate-800/30'
-                  }`}
-                >
-                  <div className="flex items-start justify-between">
-                    <motion.div
-                      animate={{
-                        scale: sheet1.length > 0 ? [1, 1.22, 1] : 1,
-                        rotate: sheet1.length > 0 ? [0, -10, 10, 0] : 0,
-                      }}
-                      transition={{ type: 'spring', stiffness: 400, damping: 16 }}
-                      className={`p-2.5 rounded-lg transition-transform duration-300 group-hover:scale-110 group-hover:rotate-3 ${
-                        sheet1.length > 0 ? 'bg-emerald-500/15 text-emerald-400' : 'bg-blue-500/10 text-blue-400'
-                      }`}
-                    >
-                      <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><rect x="4" y="2" width="16" height="20" rx="2" strokeWidth="2"/><line x1="8" y1="6" x2="16" y2="6" strokeWidth="2"/><line x1="8" y1="10" x2="10" y2="10" strokeWidth="2"/><line x1="14" y1="10" x2="16" y2="10" strokeWidth="2"/><line x1="8" y1="14" x2="10" y2="14" strokeWidth="2"/><line x1="14" y1="14" x2="16" y2="14" strokeWidth="2"/><line x1="8" y1="18" x2="16" y2="18" strokeWidth="2"/></svg>
-                    </motion.div>
-
-                    <AnimatePresence mode="wait">
-                      {sheet1.length > 0 ? (
-                        <motion.div
-                          key="sheet1-uploaded"
-                          initial={{ scale: 0.6, opacity: 0, y: -4 }}
-                          animate={{ scale: 1, opacity: 1, y: 0 }}
-                          exit={{ scale: 0.6, opacity: 0 }}
-                          transition={{ type: 'spring', stiffness: 480, damping: 20 }}
-                          className="flex items-center gap-1.5"
-                        >
-                          <motion.button
-                            whileHover={{ scale: 1.08 }}
-                            whileTap={{ scale: 0.92 }}
-                            transition={{ type: 'spring', stiffness: 500, damping: 25 }}
-                            onClick={() => {
-                              setSheet1([]);
-                              setSheet1FileName('');
-                              showToast('🗑️ تم إفراغ شيت الماكينات');
-                            }}
-                            className="text-[11px] font-medium text-rose-400 hover:text-rose-300 bg-rose-500/10 hover:bg-rose-500/20 px-1.5 py-0.5 rounded border border-rose-500/20 transition-all cursor-pointer"
-                            title="إفراغ الملف"
-                          >
-                            🗑️ إفراغ
-                          </motion.button>
-                          <span className="text-[11px] font-medium text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded border border-emerald-500/20 shadow-sm flex items-center gap-1">
-                            <span>{sheet1.length.toLocaleString('ar-EG')} ماكينة</span>
-                            <span className="text-emerald-300 font-bold">✓</span>
+                {/* File Item 1: شيت الماكينات */}
+                <div className={`border rounded-[14px] p-4 sm:px-5 sm:py-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 transition-all duration-200 ${
+                  sheet1.length > 0 ? 'border-[#059669] bg-[#0f172a]/90 shadow-sm shadow-emerald-500/10' : 'border-[#1e293b] bg-[#0f172a]'
+                }`}>
+                  <div className="flex items-center gap-3.5">
+                    <div className={`w-11 h-11 rounded-[10px] flex items-center justify-center shrink-0 transition-colors ${
+                      sheet1.length > 0 ? 'bg-[#10b981]/15 text-[#10b981]' : 'bg-[#1e293b] text-[#94a3b8]'
+                    }`}>
+                      <FileSpreadsheet className="w-5 h-5" />
+                    </div>
+                    <div className="flex flex-col gap-1">
+                      <div className="flex items-center gap-2">
+                        <span className="text-base font-bold text-[#f8fafc]">شيت الماكينات</span>
+                        {sheet1.length > 0 && (
+                          <span className="text-[10px] font-black text-emerald-400 bg-emerald-500/20 px-2 py-0.5 rounded-full border border-emerald-500/30">
+                            ✓ مرفوع
                           </span>
-                        </motion.div>
-                      ) : (
-                        <motion.span
-                          key="sheet1-empty"
-                          initial={{ scale: 0.8, opacity: 0 }}
-                          animate={{ scale: 1, opacity: 1 }}
-                          exit={{ scale: 0.8, opacity: 0 }}
-                          transition={{ type: 'spring', stiffness: 450, damping: 22 }}
-                          className="text-[11px] font-medium text-rose-400 bg-rose-500/10 px-2 py-0.5 rounded border border-rose-500/20"
-                        >
-                          غير مرفوع
-                        </motion.span>
-                      )}
-                    </AnimatePresence>
-                  </div>
-                  
-                  <div>
-                    <h3 className="text-sm font-semibold text-slate-200 group-hover:text-white transition-colors">1. شيت الماكينات</h3>
-                    <motion.p
-                      layout
-                      className="text-xs text-slate-400 mt-1 truncate transition-colors group-hover:text-slate-300"
-                      title={sheet1FileName || 'اضغط هنا لرفع الملف (Excel/CSV)'}
-                    >
-                      {sheet1FileName || 'اضغط هنا لرفع الملف (Excel/CSV)'}
-                    </motion.p>
+                        )}
+                      </div>
+                      <span className={`text-xs ${sheet1.length > 0 ? 'text-[#10b981] font-semibold' : 'text-[#64748b]'}`}>
+                        {sheet1.length > 0 ? `تم تحميل ${sheet1.length.toLocaleString('ar-EG')} ماكينة بنجاح` : 'لم يتم تحميل الملف بعد'}
+                      </span>
+                    </div>
                   </div>
 
-                  <motion.label
-                    whileHover={{ scale: 1.02 }}
-                    whileTap={{ scale: 0.96 }}
-                    transition={{ type: 'spring', stiffness: 450, damping: 25 }}
-                    className={`w-full py-2 text-xs font-medium rounded-lg border transition-all duration-200 text-center cursor-pointer block ${
+                  <div className="flex items-center gap-2 w-full sm:w-auto justify-end">
+                    {sheet1.length > 0 && (
+                      <button
+                        onClick={() => {
+                          setSheet1([]);
+                          setSheet1FileName('');
+                          showToast('🗑️ تم إفراغ شيت الماكينات');
+                        }}
+                        className="px-2.5 py-1.5 rounded-lg text-xs font-semibold text-rose-400 hover:text-rose-300 bg-rose-500/10 hover:bg-rose-500/20 border border-rose-500/20 transition-all cursor-pointer"
+                        title="إفراغ الملف"
+                      >
+                        إفراغ
+                      </button>
+                    )}
+                    <label className={`px-4 py-2 rounded-lg text-xs font-bold transition-all cursor-pointer shadow-sm text-center ${
                       sheet1.length > 0
-                        ? 'bg-emerald-950/40 hover:bg-emerald-900/60 text-emerald-200 border-emerald-700/60 shadow-sm'
-                        : 'bg-slate-800 hover:bg-slate-700 text-slate-200 border-slate-700'
-                    }`}
-                  >
-                    <span>{sheet1.length > 0 ? '🔄 تغيير الملف' : '☁️ رفع الملف'}</span>
-                    <input
-                      type="file"
-                      accept=".xlsx, .xls, .csv"
-                      className="hidden"
-                      onChange={(e) => {
-                        if (e.target.files?.length) {
-                          handleSheet1Upload(e.target.files[0]);
-                        }
-                      }}
-                    />
-                  </motion.label>
-                </motion.div>
+                        ? 'bg-[#1e293b] hover:bg-[#334155] text-[#94a3b8] hover:text-white border border-[#334155]'
+                        : 'bg-gradient-to-r from-[#4f46e5] to-[#3b82f6] hover:opacity-90 text-white'
+                    }`}>
+                      <span>{sheet1.length > 0 ? 'تغيير الملف' : 'تحميل الملف'}</span>
+                      <input
+                        type="file"
+                        accept=".xlsx, .xls, .csv"
+                        className="hidden"
+                        onChange={(e) => {
+                          if (e.target.files?.length) {
+                            handleSheet1Upload(e.target.files[0]);
+                          }
+                        }}
+                      />
+                    </label>
+                  </div>
+                </div>
 
-                {/* Card 2 */}
-                <motion.div
-                  layout
-                  transition={{ type: 'spring', stiffness: 350, damping: 26 }}
-                  whileHover={{ y: -4, transition: { type: 'spring', stiffness: 400, damping: 20 } }}
-                  whileTap={{ scale: 0.99 }}
-                  className={`border border-dashed rounded-xl p-4 flex flex-col justify-between gap-4 transition-all duration-300 shadow-sm hover:shadow-xl group relative overflow-hidden ${
-                    sheet2.length > 0
-                      ? 'border-emerald-500/60 bg-emerald-950/20 shadow-emerald-500/5'
-                      : 'border-slate-700 hover:border-indigo-500/50 bg-slate-800/30'
-                  }`}
-                >
-                  <div className="flex items-start justify-between">
-                    <motion.div
-                      animate={{
-                        scale: sheet2.length > 0 ? [1, 1.22, 1] : 1,
-                        rotate: sheet2.length > 0 ? [0, -10, 10, 0] : 0,
-                      }}
-                      transition={{ type: 'spring', stiffness: 400, damping: 16 }}
-                      className={`p-2.5 rounded-lg transition-transform duration-300 group-hover:scale-110 group-hover:-rotate-3 ${
-                        sheet2.length > 0 ? 'bg-emerald-500/15 text-emerald-400' : 'bg-indigo-500/10 text-indigo-400'
-                      }`}
-                    >
-                      <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5 5 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z"/></svg>
-                    </motion.div>
-
-                    <AnimatePresence mode="wait">
-                      {sheet2.length > 0 ? (
-                        <motion.div
-                          key="sheet2-uploaded"
-                          initial={{ scale: 0.6, opacity: 0, y: -4 }}
-                          animate={{ scale: 1, opacity: 1, y: 0 }}
-                          exit={{ scale: 0.6, opacity: 0 }}
-                          transition={{ type: 'spring', stiffness: 480, damping: 20 }}
-                          className="flex items-center gap-1.5"
-                        >
-                          <motion.button
-                            whileHover={{ scale: 1.08 }}
-                            whileTap={{ scale: 0.92 }}
-                            transition={{ type: 'spring', stiffness: 500, damping: 25 }}
-                            onClick={() => {
-                              setSheet2([]);
-                              setSheet2FileName('');
-                              showToast('🗑️ تم إفراغ شيت المدفوعات');
-                            }}
-                            className="text-[11px] font-medium text-rose-400 hover:text-rose-300 bg-rose-500/10 hover:bg-rose-500/20 px-1.5 py-0.5 rounded border border-rose-500/20 transition-all cursor-pointer"
-                            title="إفراغ الملف"
-                          >
-                            🗑️ إفراغ
-                          </motion.button>
-                          <span className="text-[11px] font-medium text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded border border-emerald-500/20 shadow-sm flex items-center gap-1">
-                            <span>{sheet2.length.toLocaleString('ar-EG')} سجل</span>
-                            <span className="text-emerald-300 font-bold">✓</span>
+                {/* File Item 2: شيت المدفوعات */}
+                <div className={`border rounded-[14px] p-4 sm:px-5 sm:py-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 transition-all duration-200 ${
+                  sheet2.length > 0 ? 'border-[#059669] bg-[#0f172a]/90 shadow-sm shadow-emerald-500/10' : 'border-[#1e293b] bg-[#0f172a]'
+                }`}>
+                  <div className="flex items-center gap-3.5">
+                    <div className={`w-11 h-11 rounded-[10px] flex items-center justify-center shrink-0 transition-colors ${
+                      sheet2.length > 0 ? 'bg-[#10b981]/15 text-[#10b981]' : 'bg-[#1e293b] text-[#94a3b8]'
+                    }`}>
+                      <Users className="w-5 h-5" />
+                    </div>
+                    <div className="flex flex-col gap-1">
+                      <div className="flex items-center gap-2">
+                        <span className="text-base font-bold text-[#f8fafc]">شيت المدفوعات</span>
+                        {sheet2.length > 0 && (
+                          <span className="text-[10px] font-black text-emerald-400 bg-emerald-500/20 px-2 py-0.5 rounded-full border border-emerald-500/30">
+                            ✓ مرفوع
                           </span>
-                        </motion.div>
-                      ) : (
-                        <motion.span
-                          key="sheet2-empty"
-                          initial={{ scale: 0.8, opacity: 0 }}
-                          animate={{ scale: 1, opacity: 1 }}
-                          exit={{ scale: 0.8, opacity: 0 }}
-                          transition={{ type: 'spring', stiffness: 450, damping: 22 }}
-                          className="text-[11px] font-medium text-rose-400 bg-rose-500/10 px-2 py-0.5 rounded border border-rose-500/20"
-                        >
-                          غير مرفوع
-                        </motion.span>
-                      )}
-                    </AnimatePresence>
-                  </div>
-                  
-                  <div>
-                    <h3 className="text-sm font-semibold text-slate-200 group-hover:text-white transition-colors">2. شيت المدفوعات</h3>
-                    <motion.p
-                      layout
-                      className="text-xs text-slate-400 mt-1 truncate transition-colors group-hover:text-slate-300"
-                      title={sheet2FileName || 'اضغط هنا لرفع الملف (Excel/CSV)'}
-                    >
-                      {sheet2FileName || 'اضغط هنا لرفع الملف (Excel/CSV)'}
-                    </motion.p>
+                        )}
+                      </div>
+                      <span className={`text-xs ${sheet2.length > 0 ? 'text-[#10b981] font-semibold' : 'text-[#64748b]'}`}>
+                        {sheet2.length > 0 ? `تم تحميل ${sheet2.length.toLocaleString('ar-EG')} حساب بنجاح` : 'لم يتم تحميل الملف بعد'}
+                      </span>
+                    </div>
                   </div>
 
-                  <motion.label
-                    whileHover={{ scale: 1.02 }}
-                    whileTap={{ scale: 0.96 }}
-                    transition={{ type: 'spring', stiffness: 450, damping: 25 }}
-                    className={`w-full py-2 text-xs font-medium rounded-lg border transition-all duration-200 text-center cursor-pointer block ${
+                  <div className="flex items-center gap-2 w-full sm:w-auto justify-end">
+                    {sheet2.length > 0 && (
+                      <button
+                        onClick={() => {
+                          setSheet2([]);
+                          setSheet2FileName('');
+                          showToast('🗑️ تم إفراغ شيت المدفوعات');
+                        }}
+                        className="px-2.5 py-1.5 rounded-lg text-xs font-semibold text-rose-400 hover:text-rose-300 bg-rose-500/10 hover:bg-rose-500/20 border border-rose-500/20 transition-all cursor-pointer"
+                        title="إفراغ الملف"
+                      >
+                        إفراغ
+                      </button>
+                    )}
+                    <label className={`px-4 py-2 rounded-lg text-xs font-bold transition-all cursor-pointer shadow-sm text-center ${
                       sheet2.length > 0
-                        ? 'bg-emerald-950/40 hover:bg-emerald-900/60 text-emerald-200 border-emerald-700/60 shadow-sm'
-                        : 'bg-slate-800 hover:bg-slate-700 text-slate-200 border-slate-700'
-                    }`}
-                  >
-                    <span>{sheet2.length > 0 ? '🔄 تغيير الملف' : '☁️ رفع الملف'}</span>
-                    <input
-                      type="file"
-                      accept=".xlsx, .xls, .csv"
-                      className="hidden"
-                      onChange={(e) => {
-                        if (e.target.files?.length) {
-                          handleSheet2Upload(e.target.files[0]);
-                        }
-                      }}
-                    />
-                  </motion.label>
-                </motion.div>
+                        ? 'bg-[#1e293b] hover:bg-[#334155] text-[#94a3b8] hover:text-white border border-[#334155]'
+                        : 'bg-gradient-to-r from-[#4f46e5] to-[#3b82f6] hover:opacity-90 text-white'
+                    }`}>
+                      <span>{sheet2.length > 0 ? 'تغيير الملف' : 'تحميل الملف'}</span>
+                      <input
+                        type="file"
+                        accept=".xlsx, .xls, .csv"
+                        className="hidden"
+                        onChange={(e) => {
+                          if (e.target.files?.length) {
+                            handleSheet2Upload(e.target.files[0]);
+                          }
+                        }}
+                      />
+                    </label>
+                  </div>
+                </div>
 
-                {/* Card 3 */}
-                <motion.div
-                  layout
-                  transition={{ type: 'spring', stiffness: 350, damping: 26 }}
-                  whileHover={{ y: -4, transition: { type: 'spring', stiffness: 400, damping: 20 } }}
-                  whileTap={{ scale: 0.99 }}
-                  className={`border border-dashed rounded-xl p-4 flex flex-col justify-between gap-4 transition-all duration-300 shadow-sm hover:shadow-xl group relative overflow-hidden ${
-                    sheet3.length > 0
-                      ? 'border-emerald-500/60 bg-emerald-950/20 shadow-emerald-500/5'
-                      : 'border-slate-700 hover:border-amber-500/50 bg-slate-800/30'
-                  }`}
-                >
-                  <div className="flex items-start justify-between">
-                    <motion.div
-                      animate={{
-                        scale: sheet3.length > 0 ? [1, 1.22, 1] : 1,
-                        rotate: sheet3.length > 0 ? [0, -10, 10, 0] : 0,
-                      }}
-                      transition={{ type: 'spring', stiffness: 400, damping: 16 }}
-                      className={`p-2.5 rounded-lg transition-transform duration-300 group-hover:scale-110 group-hover:-rotate-3 ${
-                        sheet3.length > 0 ? 'bg-emerald-500/15 text-emerald-400' : 'bg-amber-500/10 text-amber-400'
-                      }`}
-                    >
-                      <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
-                    </motion.div>
-
-                    <AnimatePresence mode="wait">
-                      {sheet3.length > 0 ? (
-                        <motion.div
-                          key="sheet3-uploaded"
-                          initial={{ scale: 0.6, opacity: 0, y: -4 }}
-                          animate={{ scale: 1, opacity: 1, y: 0 }}
-                          exit={{ scale: 0.6, opacity: 0 }}
-                          transition={{ type: 'spring', stiffness: 480, damping: 20 }}
-                          className="flex items-center gap-1.5"
-                        >
-                          <motion.button
-                            whileHover={{ scale: 1.08 }}
-                            whileTap={{ scale: 0.92 }}
-                            transition={{ type: 'spring', stiffness: 500, damping: 25 }}
-                            onClick={handleApplyCashPrefix}
-                            className="text-[11px] font-medium text-emerald-400 hover:text-emerald-300 bg-emerald-500/10 hover:bg-emerald-500/20 px-1.5 py-0.5 rounded border border-emerald-500/20 transition-all cursor-pointer"
-                            title="إضافة 7- للماكينات"
-                          >
-                            ⚡ 7-
-                          </motion.button>
-                          <motion.button
-                            whileHover={{ scale: 1.08 }}
-                            whileTap={{ scale: 0.92 }}
-                            transition={{ type: 'spring', stiffness: 500, damping: 25 }}
-                            onClick={() => {
-                              setSheet3([]);
-                              setSheet3FileName('');
-                              showToast('🗑️ تم إفراغ شيت الكاش');
-                            }}
-                            className="text-[11px] font-medium text-rose-400 hover:text-rose-300 bg-rose-500/10 hover:bg-rose-500/20 px-1.5 py-0.5 rounded border border-rose-500/20 transition-all cursor-pointer"
-                            title="إفراغ الملف"
-                          >
-                            🗑️ إفراغ
-                          </motion.button>
-                          <span className="text-[11px] font-medium text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded border border-emerald-500/20 shadow-sm flex items-center gap-1">
-                            <span>{sheet3.length.toLocaleString('ar-EG')} سجل</span>
-                            <span className="text-emerald-300 font-bold">✓</span>
+                {/* File Item 3: شيت أجهزة الكاش */}
+                <div className={`border rounded-[14px] p-4 sm:px-5 sm:py-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 transition-all duration-200 ${
+                  sheet3.length > 0 ? 'border-[#059669] bg-[#0f172a]/90 shadow-sm shadow-emerald-500/10' : 'border-[#1e293b] bg-[#0f172a]'
+                }`}>
+                  <div className="flex items-center gap-3.5">
+                    <div className={`w-11 h-11 rounded-[10px] flex items-center justify-center shrink-0 transition-colors ${
+                      sheet3.length > 0 ? 'bg-[#10b981]/15 text-[#10b981]' : 'bg-[#1e293b] text-[#94a3b8]'
+                    }`}>
+                      <Calculator className="w-5 h-5" />
+                    </div>
+                    <div className="flex flex-col gap-1">
+                      <div className="flex items-center gap-2">
+                        <span className="text-base font-bold text-[#f8fafc]">شيت أجهزة الكاش</span>
+                        {sheet3.length > 0 && (
+                          <span className="text-[10px] font-black text-emerald-400 bg-emerald-500/20 px-2 py-0.5 rounded-full border border-emerald-500/30">
+                            ✓ مرفوع
                           </span>
-                        </motion.div>
-                      ) : (
-                        <motion.span
-                          key="sheet3-empty"
-                          initial={{ scale: 0.8, opacity: 0 }}
-                          animate={{ scale: 1, opacity: 1 }}
-                          exit={{ scale: 0.8, opacity: 0 }}
-                          transition={{ type: 'spring', stiffness: 450, damping: 22 }}
-                          className="text-[11px] font-medium text-rose-400 bg-rose-500/10 px-2 py-0.5 rounded border border-rose-500/20"
-                        >
-                          غير مرفوع
-                        </motion.span>
-                      )}
-                    </AnimatePresence>
-                  </div>
-                  
-                  <div>
-                    <h3 className="text-sm font-semibold text-slate-200 group-hover:text-white transition-colors">3. شيت الكاش</h3>
-                    <motion.p
-                      layout
-                      className="text-xs text-slate-400 mt-1 truncate transition-colors group-hover:text-slate-300"
-                      title={sheet3FileName || 'اضغط هنا لرفع الملف (Excel/CSV)'}
-                    >
-                      {sheet3FileName || 'اضغط هنا لرفع الملف (Excel/CSV)'}
-                    </motion.p>
+                        )}
+                      </div>
+                      <span className={`text-xs ${sheet3.length > 0 ? 'text-[#10b981] font-semibold' : 'text-[#64748b]'}`}>
+                        {sheet3.length > 0 ? `تم تحميل ${sheet3.length.toLocaleString('ar-EG')} جهاز بنجاح` : 'لم يتم تحميل الملف بعد'}
+                      </span>
+                    </div>
                   </div>
 
-                  <motion.label
-                    whileHover={{ scale: 1.02 }}
-                    whileTap={{ scale: 0.96 }}
-                    transition={{ type: 'spring', stiffness: 450, damping: 25 }}
-                    className={`w-full py-2 text-xs font-medium rounded-lg border transition-all duration-200 text-center cursor-pointer block ${
+                  <div className="flex items-center gap-2 w-full sm:w-auto justify-end">
+                    {sheet3.length > 0 && (
+                      <button
+                        onClick={() => {
+                          setSheet3([]);
+                          setSheet3FileName('');
+                          showToast('🗑️ تم إفراغ شيت الكاش');
+                        }}
+                        className="px-2.5 py-1.5 rounded-lg text-xs font-semibold text-rose-400 hover:text-rose-300 bg-rose-500/10 hover:bg-rose-500/20 border border-rose-500/20 transition-all cursor-pointer"
+                        title="إفراغ الملف"
+                      >
+                        إفراغ
+                      </button>
+                    )}
+                    <label className={`px-4 py-2 rounded-lg text-xs font-bold transition-all cursor-pointer shadow-sm text-center ${
                       sheet3.length > 0
-                        ? 'bg-emerald-950/40 hover:bg-emerald-900/60 text-emerald-200 border-emerald-700/60 shadow-sm'
-                        : 'bg-slate-800 hover:bg-slate-700 text-slate-200 border-slate-700'
-                    }`}
-                  >
-                    <span>{sheet3.length > 0 ? '🔄 تغيير الملف' : '☁️ رفع الملف'}</span>
-                    <input
-                      type="file"
-                      accept=".xlsx, .xls, .csv"
-                      className="hidden"
-                      onChange={(e) => {
-                        if (e.target.files?.length) {
-                          handleSheet3Upload(e.target.files[0]);
-                        }
-                      }}
-                    />
-                  </motion.label>
-                </motion.div>
+                        ? 'bg-[#1e293b] hover:bg-[#334155] text-[#94a3b8] hover:text-white border border-[#334155]'
+                        : 'bg-gradient-to-r from-[#4f46e5] to-[#3b82f6] hover:opacity-90 text-white'
+                    }`}>
+                      <span>{sheet3.length > 0 ? 'تغيير الملف' : 'تحميل الملف'}</span>
+                      <input
+                        type="file"
+                        accept=".xlsx, .xls, .csv"
+                        className="hidden"
+                        onChange={(e) => {
+                          if (e.target.files?.length) {
+                            handleSheet3Upload(e.target.files[0]);
+                          }
+                        }}
+                      />
+                    </label>
+                  </div>
+                </div>
 
               </div>
 
-              {/* Bottom Action */}
-              <div className="pt-2 flex items-center justify-between border-t border-slate-800">
-                <div className="flex items-center gap-3">
-                  <button
-                    onClick={() => setIsResetConfirmOpen(true)}
-                    className="text-xs text-slate-400 hover:text-rose-400 transition-colors cursor-pointer hover:underline"
-                  >
-                    إلغاء
-                  </button>
-                  <button
-                    onClick={handleLoadSample}
-                    className="text-xs text-slate-500 hover:text-blue-400 transition-colors cursor-pointer hover:underline"
-                  >
-                    عينة بيانات تجريبية ✨
-                  </button>
+              {/* Right Side: Status Panel */}
+              <div className="bg-[#0f172a]/70 border border-[#1e293b] rounded-[16px] p-6 flex flex-col items-center text-center justify-between relative">
+                
+                <div className="flex flex-col items-center w-full">
+                  <div className="bg-indigo-500/15 text-[#818cf8] border border-indigo-500/30 px-4 py-1.5 rounded-full text-xs font-bold mb-3.5 inline-flex items-center gap-1.5">
+                    ✨ حالة الجاهزية
+                  </div>
+
+                  <h3 className="text-xl sm:text-2xl font-black text-white mb-2">
+                    {(sheet1.length > 0 || sheet2.length > 0 || sheet3.length > 0) ? 'جاهز للمطابقة' : 'غير جاهز للمطابقة'}
+                  </h3>
+
+                  <p className="text-xs text-[#94a3b8] leading-relaxed mb-6">
+                    {(sheet1.length > 0 || sheet2.length > 0 || sheet3.length > 0)
+                      ? 'تم التحقق من كافة الملفات المحملة، يمكنك الآن تشغيل نظام المطابقة الذكي.'
+                      : 'برجاء تحميل الملفات المطلوبة لبدء تشغيل نظام المطابقة الذكي.'}
+                  </p>
+
+                  {/* Progress Box */}
+                  <div className="bg-[#0b1120] border border-[#1e293b] rounded-[10px] p-3.5 sm:p-4 w-full mb-6">
+                    <div className="flex justify-between text-xs font-bold mb-2.5">
+                      <span className="text-[#94a3b8]">الملفات المحملة</span>
+                      <span className="text-[#10b981] font-mono">
+                        {((sheet1.length > 0 ? 1 : 0) + (sheet2.length > 0 ? 1 : 0) + (sheet3.length > 0 ? 1 : 0))} من 3
+                      </span>
+                    </div>
+
+                    <div className="bg-[#1e293b] h-2 rounded-full overflow-hidden w-full">
+                      <div
+                        className="bg-[#10b981] h-full transition-all duration-500 rounded-full"
+                        style={{
+                          width: `${(((sheet1.length > 0 ? 1 : 0) + (sheet2.length > 0 ? 1 : 0) + (sheet3.length > 0 ? 1 : 0)) / 3) * 100}%`,
+                        }}
+                      />
+                    </div>
+                  </div>
                 </div>
-                <motion.button
-                  whileHover={{ scale: (sheet1.length > 0 && (sheet2.length > 0 || sheet3.length > 0)) ? 1.04 : 1.01 }}
-                  whileTap={{ scale: 0.95 }}
-                  transition={{ type: 'spring', stiffness: 450, damping: 22 }}
+
+                {/* Main Run Button */}
+                <button
                   onClick={runReconciliation}
-                  className={`px-5 py-2.5 rounded-xl text-xs font-bold text-white transition-all duration-200 flex items-center gap-2 cursor-pointer ${
-                    sheet1.length > 0 && (sheet2.length > 0 || sheet3.length > 0)
-                      ? 'bg-blue-600 hover:bg-blue-500 shadow-lg shadow-blue-500/30 animate-ready-btn'
-                      : 'bg-blue-600/70 hover:bg-blue-600 shadow-md shadow-blue-500/10'
-                  }`}
+                  className="w-full py-3.5 border-none rounded-[10px] bg-gradient-to-r from-[#10b981] to-[#3b82f6] hover:opacity-95 active:scale-[0.98] text-white text-base font-extrabold cursor-pointer flex items-center justify-center gap-2 shadow-lg shadow-emerald-500/20 transition-all"
                 >
-                  <svg className="w-4 h-4 transition-transform duration-200 group-hover:rotate-12" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
-                  <span>بدء المطابقة ({expandedRows.length})</span>
-                </motion.button>
+                  <Zap className="w-5 h-5 text-amber-300" />
+                  <span>تشغيل المطابقة الآن</span>
+                </button>
+
               </div>
 
             </div>
@@ -2042,7 +1937,15 @@ export default function App() {
                   </p>
                 </div>
 
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <button
+                    onClick={handleApplyCashPrefix}
+                    className="px-3.5 py-1.5 text-xs font-black rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white flex items-center gap-1.5 transition-all shadow-md shadow-emerald-600/20 cursor-pointer"
+                    title="تحويل كافة ماكينات الكاش في الشيت المرفوع تلقائياً إلى البادئة 7-"
+                  >
+                    <Zap className="w-3.5 h-3.5 text-amber-300" />
+                    <span>⚡ تحويل ماكينات الكاش لـ 7-</span>
+                  </button>
                   <button
                     onClick={() => {
                       setEditorInitialMode(1);
@@ -2085,14 +1988,140 @@ export default function App() {
               </label>
 
               {sheet1.length > 0 && (
-                <div className="mt-4 p-3 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-600 dark:text-emerald-400 text-xs font-bold flex items-center justify-between">
-                  <span>تم قراءة شيت الماكينات بنجاح: {sheet1.length} ماكينة</span>
-                  <button
-                    onClick={() => setCurrentTab(2)}
-                    className="text-indigo-600 dark:text-indigo-400 underline font-bold cursor-pointer"
-                  >
-                    الانتقال لرفع شيت المناديب &larr;
-                  </button>
+                <div className="mt-5 space-y-4 border-t border-slate-200 dark:border-slate-800/80 pt-5">
+                  <div className="p-3.5 rounded-2xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-600 dark:text-emerald-400 text-xs font-bold flex flex-wrap items-center justify-between gap-3">
+                    <div className="flex items-center gap-2">
+                      <CheckCircle2 className="w-4 h-4 text-emerald-500 shrink-0" />
+                      <span>تم قراءة شيت الماكينات بنجاح: {sheet1.length.toLocaleString('ar-EG')} ماكينة</span>
+                      {sheet1FileName && <span className="text-slate-400 font-normal">({sheet1FileName})</span>}
+                    </div>
+
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={handleApplyCashPrefix}
+                        className="px-3 py-1 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-black transition cursor-pointer flex items-center gap-1 shadow-sm"
+                      >
+                        <Zap className="w-3.5 h-3.5 text-amber-300" />
+                        <span>⚡ تحويل ماكينات الكاش لـ 7-</span>
+                      </button>
+                      <button
+                        onClick={() => setCurrentTab(2)}
+                        className="text-indigo-600 dark:text-indigo-400 hover:text-indigo-500 underline font-bold cursor-pointer transition text-xs"
+                      >
+                        الانتقال لرفع شيت المناديب &larr;
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Live Sheet 1 Preview Table with Interactive Filter Pills */}
+                  <div className="bg-slate-50 dark:bg-slate-800/40 rounded-2xl border border-slate-200 dark:border-slate-800 overflow-hidden shadow-sm">
+                    <div className="p-3.5 bg-slate-100 dark:bg-slate-800 flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 dark:border-slate-700">
+                      <div className="flex items-center gap-2">
+                        <Eye className="w-4 h-4 text-indigo-500" />
+                        <h4 className="text-xs font-bold text-slate-800 dark:text-slate-200">
+                          معاينة بيانات شيت الماكينات المرفوع مباشرة ({Math.min(25, filteredPreviewRows.length)} من {filteredPreviewRows.length.toLocaleString('ar-EG')})
+                        </h4>
+                      </div>
+
+                      {/* Filter Pills for Cash & Payments */}
+                      <div className="flex items-center gap-1.5 bg-white dark:bg-slate-900 p-1 rounded-xl border border-slate-200 dark:border-slate-700">
+                        <button
+                          onClick={() => setSheet1PreviewFilter('all')}
+                          className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition-all cursor-pointer ${
+                            sheet1PreviewFilter === 'all'
+                              ? 'bg-indigo-600 text-white shadow-sm'
+                              : 'text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800'
+                          }`}
+                        >
+                          كافة الماكينات ({sheet1.length})
+                        </button>
+
+                        <button
+                          onClick={() => setSheet1PreviewFilter('cash')}
+                          className={`px-2.5 py-1 rounded-lg text-[11px] font-bold flex items-center gap-1 transition-all cursor-pointer ${
+                            sheet1PreviewFilter === 'cash'
+                              ? 'bg-emerald-600 text-white shadow-sm'
+                              : 'text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800'
+                          }`}
+                        >
+                          <span>💵 ماكينات الكاش</span>
+                          <span className="px-1.5 py-0.2 rounded-full bg-emerald-950/40 text-emerald-200 font-mono text-[10px]">
+                            {cashMachinesCount}
+                          </span>
+                        </button>
+
+                        <button
+                          onClick={() => setSheet1PreviewFilter('payments')}
+                          className={`px-2.5 py-1 rounded-lg text-[11px] font-bold flex items-center gap-1 transition-all cursor-pointer ${
+                            sheet1PreviewFilter === 'payments'
+                              ? 'bg-blue-600 text-white shadow-sm'
+                              : 'text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800'
+                          }`}
+                        >
+                          <span>💳 ماكينات المدفوعات</span>
+                          <span className="px-1.5 py-0.2 rounded-full bg-blue-950/40 text-blue-200 font-mono text-[10px]">
+                            {payMachinesCount}
+                          </span>
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="overflow-x-auto max-h-80 overflow-y-auto">
+                      <table className="w-full text-right text-xs">
+                        <thead className="bg-slate-200/80 dark:bg-slate-900 text-slate-700 dark:text-slate-300 font-bold sticky top-0 border-b border-slate-200 dark:border-slate-800 z-10">
+                          <tr>
+                            <th className="p-2.5 w-12 text-center font-mono">م</th>
+                            {Object.keys(sheet1[0]).map((col) => (
+                              <th key={col} className="p-2.5">{col}</th>
+                            ))}
+                            <th className="p-2.5 text-center">تصنيف الماكينة</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-200 dark:divide-slate-800/60 font-mono">
+                          {filteredPreviewRows.length === 0 ? (
+                            <tr>
+                              <td colSpan={Object.keys(sheet1[0]).length + 2} className="p-8 text-center text-slate-400">
+                                لا توجد ماكينات مطابقة لهذا التصنيف في الشيت المرفوع حالياً.
+                              </td>
+                            </tr>
+                          ) : (
+                            filteredPreviewRows.slice(0, 25).map((row, idx) => {
+                              const mCol = colM1 || Object.keys(row)[0];
+                              const machineVal = String(row[mCol] || '').trim();
+                              const isCash = machineVal.startsWith('7-') || machineVal.startsWith('٧-');
+                              return (
+                                <tr key={idx} className="hover:bg-slate-100 dark:hover:bg-slate-800/60 transition-colors">
+                                  <td className="p-2 text-center text-slate-400 font-bold">{idx + 1}</td>
+                                  {Object.keys(sheet1[0]).map((col) => (
+                                    <td key={col} className="p-2 font-bold text-slate-800 dark:text-slate-200">
+                                      {String(row[col] ?? '')}
+                                    </td>
+                                  ))}
+                                  <td className="p-2 text-center">
+                                    {isCash ? (
+                                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-black bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20">
+                                        💵 ماكينة كاش (7-)
+                                      </span>
+                                    ) : (
+                                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-black bg-blue-500/10 text-blue-600 dark:text-blue-400 border border-blue-500/20">
+                                        💳 مدفوعات
+                                      </span>
+                                    )}
+                                  </td>
+                                </tr>
+                              );
+                            })
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
+
+                    {filteredPreviewRows.length > 25 && (
+                      <div className="p-2.5 bg-slate-100/50 dark:bg-slate-800/50 text-center text-[11px] text-slate-500 dark:text-slate-400 border-t border-slate-200 dark:border-slate-700 font-semibold">
+                        عرض أول 25 ماكينة من إجمالي {filteredPreviewRows.length.toLocaleString('ar-EG')} ماكينة محملة في هذا التصنيف.
+                      </div>
+                    )}
+                  </div>
                 </div>
               )}
             </div>
@@ -2155,14 +2184,66 @@ export default function App() {
               </label>
 
               {sheet2.length > 0 && (
-                <div className="mt-4 p-3 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-600 dark:text-emerald-400 text-xs font-bold flex items-center justify-between">
-                  <span>تم قراءة شيت المدفوعات بنجاح: {sheet2.length} سجل توزيع</span>
-                  <button
-                    onClick={() => setCurrentTab(3)}
-                    className="text-indigo-600 dark:text-indigo-400 underline font-bold cursor-pointer"
-                  >
-                    الانتقال لرفع شيت الكاش &larr;
-                  </button>
+                <div className="mt-5 space-y-4 border-t border-slate-200 dark:border-slate-800/80 pt-5">
+                  <div className="p-3.5 rounded-2xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-600 dark:text-emerald-400 text-xs font-bold flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <CheckCircle2 className="w-4 h-4 text-emerald-500 shrink-0" />
+                      <span>تم قراءة شيت المدفوعات بنجاح: {sheet2.length.toLocaleString('ar-EG')} سجل توزيع</span>
+                      {sheet2FileName && <span className="text-slate-400 font-normal">({sheet2FileName})</span>}
+                    </div>
+                    <button
+                      onClick={() => setCurrentTab(3)}
+                      className="text-indigo-600 dark:text-indigo-400 underline font-bold cursor-pointer transition text-xs"
+                    >
+                      الانتقال لرفع شيت الكاش &larr;
+                    </button>
+                  </div>
+
+                  {/* Live Sheet 2 Preview Table */}
+                  <div className="bg-slate-50 dark:bg-slate-800/40 rounded-2xl border border-slate-200 dark:border-slate-800 overflow-hidden shadow-sm">
+                    <div className="p-3.5 bg-slate-100 dark:bg-slate-800 flex items-center justify-between border-b border-slate-200 dark:border-slate-700">
+                      <div className="flex items-center gap-2">
+                        <Eye className="w-4 h-4 text-blue-500" />
+                        <h4 className="text-xs font-bold text-slate-800 dark:text-slate-200">
+                          معاينة بيانات شيت المدفوعات المرفوع مباشرة ({Math.min(25, sheet2.length)} من {sheet2.length.toLocaleString('ar-EG')})
+                        </h4>
+                      </div>
+                      <span className="text-[10px] font-bold text-slate-500 dark:text-slate-400 bg-white dark:bg-slate-900 px-2 py-0.5 rounded-md border border-slate-200 dark:border-slate-700">
+                        معاينة الشيت أوفلاين 100%
+                      </span>
+                    </div>
+
+                    <div className="overflow-x-auto max-h-80 overflow-y-auto">
+                      <table className="w-full text-right text-xs">
+                        <thead className="bg-slate-200/80 dark:bg-slate-900 text-slate-700 dark:text-slate-300 font-bold sticky top-0 border-b border-slate-200 dark:border-slate-800 z-10">
+                          <tr>
+                            <th className="p-2.5 w-12 text-center font-mono">م</th>
+                            {Object.keys(sheet2[0]).map((col) => (
+                              <th key={col} className="p-2.5">{col}</th>
+                            ))}
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-200 dark:divide-slate-800/60 font-mono">
+                          {sheet2.slice(0, 25).map((row, idx) => (
+                            <tr key={idx} className="hover:bg-slate-100 dark:hover:bg-slate-800/60 transition-colors">
+                              <td className="p-2 text-center text-slate-400 font-bold">{idx + 1}</td>
+                              {Object.keys(sheet2[0]).map((col) => (
+                                <td key={col} className="p-2 font-bold text-slate-800 dark:text-slate-200">
+                                  {String(row[col] ?? '')}
+                                </td>
+                              ))}
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+
+                    {sheet2.length > 25 && (
+                      <div className="p-2.5 bg-slate-100/50 dark:bg-slate-800/50 text-center text-[11px] text-slate-500 dark:text-slate-400 border-t border-slate-200 dark:border-slate-700 font-semibold">
+                        عرض أول 25 سجل من إجمالي {sheet2.length.toLocaleString('ar-EG')} سجل محمل في الشيت.
+                      </div>
+                    )}
+                  </div>
                 </div>
               )}
             </div>
@@ -2218,12 +2299,20 @@ export default function App() {
                 <div className="mt-6 p-4 rounded-2xl bg-[#080d16]/60 border border-slate-850 space-y-4">
                   <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-emerald-500/10 border border-emerald-500/20 p-3.5 rounded-xl text-emerald-600 dark:text-emerald-400 text-xs font-bold">
                     <span>تم قراءة شيت الكاش بنجاح: {sheet3.length.toLocaleString('ar-EG')} سجل كاش</span>
-                    <button
-                      onClick={() => setCurrentTab(4)}
-                      className="text-indigo-600 dark:text-indigo-400 hover:text-indigo-500 underline font-bold cursor-pointer transition"
-                    >
-                      الانتقال لتعيين الأعمدة &larr;
-                    </button>
+                    <div className="flex items-center gap-3">
+                      <button
+                        onClick={handleApplyCashPrefix}
+                        className="px-3 py-1 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-[10px] font-black transition cursor-pointer"
+                      >
+                        ⚡ تحويل لـ 7-
+                      </button>
+                      <button
+                        onClick={() => setCurrentTab(4)}
+                        className="text-indigo-600 dark:text-indigo-400 hover:text-indigo-500 underline font-bold cursor-pointer transition"
+                      >
+                        الانتقال لتعيين الأعمدة &larr;
+                      </button>
+                    </div>
                   </div>
 
                   {/* Smart Helper Card */}
@@ -2242,10 +2331,57 @@ export default function App() {
                       whileTap={{ scale: 0.97 }}
                       transition={{ type: 'spring', stiffness: 450, damping: 22 }}
                       onClick={handleApplyCashPrefix}
-                      className="px-4 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-black shadow-md shadow-emerald-500/10 hover:shadow-emerald-500/20 transition-all cursor-pointer flex items-center gap-1.5 shrink-0"
+                      className="px-4 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-black transition-all shadow-lg shadow-emerald-600/30 flex items-center gap-1.5 shrink-0 cursor-pointer"
                     >
-                      <span>⚡ إضافة البادئة (7-) تلقائياً</span>
+                      <Zap className="w-4 h-4 text-amber-300" />
+                      <span>⚡ تحويل ماكينات الكاش إلى 7-</span>
                     </motion.button>
+                  </div>
+
+                  {/* Live Sheet 3 Preview Table */}
+                  <div className="bg-slate-50 dark:bg-slate-800/40 rounded-2xl border border-slate-200 dark:border-slate-800 overflow-hidden shadow-sm">
+                    <div className="p-3.5 bg-slate-100 dark:bg-slate-800 flex items-center justify-between border-b border-slate-200 dark:border-slate-700">
+                      <div className="flex items-center gap-2">
+                        <Eye className="w-4 h-4 text-emerald-500" />
+                        <h4 className="text-xs font-bold text-slate-800 dark:text-slate-200">
+                          معاينة بيانات شيت الكاش المرفوع مباشرة ({Math.min(25, sheet3.length)} من {sheet3.length.toLocaleString('ar-EG')})
+                        </h4>
+                      </div>
+                      <span className="text-[10px] font-bold text-slate-500 dark:text-slate-400 bg-white dark:bg-slate-900 px-2 py-0.5 rounded-md border border-slate-200 dark:border-slate-700">
+                        معاينة الشيت أوفلاين 100%
+                      </span>
+                    </div>
+
+                    <div className="overflow-x-auto max-h-80 overflow-y-auto">
+                      <table className="w-full text-right text-xs">
+                        <thead className="bg-slate-200/80 dark:bg-slate-900 text-slate-700 dark:text-slate-300 font-bold sticky top-0 border-b border-slate-200 dark:border-slate-800 z-10">
+                          <tr>
+                            <th className="p-2.5 w-12 text-center font-mono">م</th>
+                            {Object.keys(sheet3[0]).map((col) => (
+                              <th key={col} className="p-2.5">{col}</th>
+                            ))}
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-200 dark:divide-slate-800/60 font-mono">
+                          {sheet3.slice(0, 25).map((row, idx) => (
+                            <tr key={idx} className="hover:bg-slate-100 dark:hover:bg-slate-800/60 transition-colors">
+                              <td className="p-2 text-center text-slate-400 font-bold">{idx + 1}</td>
+                              {Object.keys(sheet3[0]).map((col) => (
+                                <td key={col} className="p-2 font-bold text-slate-800 dark:text-slate-200">
+                                  {String(row[col] ?? '')}
+                                </td>
+                              ))}
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+
+                    {sheet3.length > 25 && (
+                      <div className="p-2.5 bg-slate-100/50 dark:bg-slate-800/50 text-center text-[11px] text-slate-500 dark:text-slate-400 border-t border-slate-200 dark:border-slate-700 font-semibold">
+                        عرض أول 25 سجل من إجمالي {sheet3.length.toLocaleString('ar-EG')} سجل كاش محمل في الشيت.
+                      </div>
+                    )}
                   </div>
                 </div>
               )}

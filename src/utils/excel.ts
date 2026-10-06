@@ -82,6 +82,32 @@ export async function parseExcelFile(file: File): Promise<SheetRow[]> {
     return result;
   };
 
+  // Check if workbook has specific Cash or Payment sheets
+  const hasMultipleSheets = workbook.SheetNames.length > 1;
+  let allRowsCombined: SheetRow[] = [];
+
+  if (hasMultipleSheets) {
+    for (const sheetName of workbook.SheetNames) {
+      const ws = workbook.Sheets[sheetName];
+      let candidateRows = extractRowsFromWorksheet(ws);
+      if (!candidateRows.length) continue;
+
+      const isCashSheet = /كاش|cash/i.test(sheetName);
+      const isPaymentSheet = /مدفوعات|payment/i.test(sheetName);
+
+      candidateRows = candidateRows.map((row) => ({
+        ...row,
+        _tabType: isCashSheet ? 'cash' : isPaymentSheet ? 'payments' : undefined,
+      }));
+
+      allRowsCombined = [...allRowsCombined, ...candidateRows];
+    }
+  }
+
+  if (allRowsCombined.length > 0) {
+    return allRowsCombined;
+  }
+
   let bestRows: SheetRow[] = [];
   for (const sheetName of workbook.SheetNames) {
     const ws = workbook.Sheets[sheetName];
@@ -170,13 +196,17 @@ export function downloadTemplateFile(templateType: 1 | 2 | 3, format: 'xlsx' | '
     const wb = XLSX.utils.book_new();
     
     if (templateType === 1) {
-      const ws1 = XLSX.utils.aoa_to_sheet([['رقم الماكينة', 'الفرع / المنطقة', 'ملاحظات'], ...sampleRows]);
+      const cashSampleRows = [
+        ['7-POS-1001', 'فرع المعادي - القاهرة', 'ماكينة كاش'],
+        ['1234', 'فرع المهندسين - الجيزة', 'ماكينة كاش تحول لـ 7-1234 تلقائياً'],
+      ];
+      const ws1 = XLSX.utils.aoa_to_sheet([['رقم الماكينة', 'الفرع / المنطقة', 'ملاحظات'], ...cashSampleRows]);
       ws1['!cols'] = [{ wch: 22 }, { wch: 30 }, { wch: 25 }];
-      XLSX.utils.book_append_sheet(wb, ws1, 'ماكينات المدفوعات');
+      XLSX.utils.book_append_sheet(wb, ws1, 'ماكينات الكاش');
 
       const ws2 = XLSX.utils.aoa_to_sheet([['رقم الماكينة', 'الفرع / المنطقة', 'ملاحظات'], ...sampleRows]);
       ws2['!cols'] = [{ wch: 22 }, { wch: 30 }, { wch: 25 }];
-      XLSX.utils.book_append_sheet(wb, ws2, 'ماكينات الكاش');
+      XLSX.utils.book_append_sheet(wb, ws2, 'ماكينات المدفوعات');
     } else {
       const ws = XLSX.utils.aoa_to_sheet(fullAoa);
       ws['!cols'] = templateType === 2 ? [{ wch: 22 }, { wch: 24 }, { wch: 32 }, { wch: 18 }] : [{ wch: 22 }, { wch: 24 }, { wch: 32 }, { wch: 18 }];
