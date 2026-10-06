@@ -4,9 +4,9 @@ import path from 'path';
 import {defineConfig} from 'vite';
 import {VitePWA} from 'vite-plugin-pwa';
 
-export default defineConfig(({ command }) => {
+export default defineConfig(() => {
   return {
-    base: command === 'build' ? '/AA/' : '/',
+    base: '/',
     plugins: [
       react(),
       tailwindcss(),
@@ -14,7 +14,7 @@ export default defineConfig(({ command }) => {
         registerType: 'autoUpdate',
         includeAssets: ['icon.svg', 'apple-touch-icon.png', 'pwa-192x192.png', 'pwa-512x512.png'],
         manifest: {
-          id: command === 'build' ? '/AA/' : '/',
+          id: '/',
           name: 'MatchHub Desktop - مطابقة الماكينات وحسابات المناديب',
           short_name: 'MatchHub',
           description: 'تطبيق سطح المكتب لمطابقة ماكينات الدفع والبيع وحسابات المناديب بدون إنترنت',
@@ -22,8 +22,8 @@ export default defineConfig(({ command }) => {
           background_color: '#090d16',
           display: 'standalone',
           orientation: 'any',
-          start_url: command === 'build' ? '/AA/' : '/',
-          scope: command === 'build' ? '/AA/' : '/',
+          start_url: '/',
+          scope: '/',
           icons: [
             {
               src: '/pwa-192x192.png',
@@ -52,6 +52,9 @@ export default defineConfig(({ command }) => {
           ],
         },
         workbox: {
+          cleanupOutdatedCaches: true,
+          clientsClaim: true,
+          skipWaiting: true,
           globPatterns: ['**/*.{js,css,html,ico,png,svg,woff,woff2}'],
         },
         devOptions: {
