@@ -120,6 +120,7 @@ export default function App() {
 
   // Filtering & Pagination
   const [currentFilter, setCurrentFilter] = useState<'all' | 'single' | 'multi' | 'none'>('all');
+  const [accountTypeFilter, setAccountTypeFilter] = useState<'all' | 'cash' | 'payments'>('all');
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [currentPage, setCurrentPage] = useState<number>(1);
   const [viewMode, setViewMode] = useState<'cards' | 'table'>('cards'); // Default to vibrant Cards & Boxes view
@@ -482,91 +483,38 @@ export default function App() {
       return;
     }
 
-    setProgressState({
-      isOpen: true,
-      title: 'مطابقة',
-      fileName: 'محرك المطابقة المليوني O(1)',
-      subtitle: 'جاري مطابقة الماكينات وتفصيل أسطر المناديب وحساباتهم...',
-      percent: 30,
-      stepText: 'تحليل مصفوفة الهاش ومطابقة شيت المكن بشيت الربط...',
-      countText: '',
-      isComplete: false,
-    });
-
-    setTimeout(() => {
-      setProgressState((p) => ({
-        ...p,
-        percent: 75,
-        stepText: 'توليد أسطر التعدد والتحقق من حسابات المناديب...',
-      }));
-
-      setTimeout(() => {
-        executeReconciliation(sheet1, sheet2, sheet3, colM1, colM2, colAcc, colRep, colM3, colCashAcc, colCashRep, emptyRepFallback);
-        setProgressState((p) => ({
-          ...p,
-          percent: 100,
-          stepText: 'تمت مطابقة وتفصيل كافة الأسطر بنجاح!',
-          isComplete: true,
-        }));
-
-        setTimeout(() => {
-          setProgressState((p) => ({ ...p, isOpen: false }));
-          showToast('⚡ تم تحديث ومطابقة البيانات بنجاح!');
-          setCurrentTab(4);
-        }, 500);
-      }, 350);
-    }, 250);
+    executeReconciliation(sheet1, sheet2, sheet3, colM1, colM2, colAcc, colRep, colM3, colCashAcc, colCashRep, emptyRepFallback);
+    showToast('⚡ تم تحديث ومطابقة البيانات بنجاح!');
+    setCurrentTab(5);
   };
 
   // Handle Sheet 1 upload
   const handleSheet1Upload = async (file: File) => {
     setIsSheet1Loading(true);
-    setProgressState({
-      isOpen: true,
-      title: 'قراءة',
-      fileName: file.name,
-      subtitle: 'جاري تحليل خلايا وسجلات ملف الإكسل...',
-      percent: 40,
-      stepText: 'استخراج أرقام الماكينات وتدقيق التكرارات...',
-      countText: '',
-      isComplete: false,
-    });
 
     try {
       const data = await parseExcelFile(file);
       if (!data || data.length === 0) {
         setIsSheet1Loading(false);
-        setProgressState((p) => ({ ...p, isOpen: false }));
         showToast('⚠️ لم يتم العثور على أسطر بيانات صالحة في «' + file.name + '». يرجى التأكد من محتوى الملف.');
         return;
       }
 
       setSheet1(data);
       setSheet1FileName(file.name);
+      setIsSheet1Loading(false);
+      showToast(`⚡ تم قراءة شيت الماكينات فوراً (${data.length.toLocaleString('ar-EG')} ماكينة).`);
 
-      setProgressState((p) => ({
-        ...p,
-        percent: 100,
-        stepText: `تم قراءة ${data.length} ماكينة بنجاح!`,
-        isComplete: true,
-      }));
-
-      setTimeout(() => {
-        setIsSheet1Loading(false);
-        setProgressState((p) => ({ ...p, isOpen: false }));
-        showToast(`✅ تم قراءة شيت الماكينات بنجاح (${data.length.toLocaleString('ar-EG')} ماكينة).`);
-        const canAutoRun = (sheet2.length > 0 || sheet3.length > 0) &&
-                           colM1 &&
-                           (sheet2.length === 0 || (colM2 && colRep)) &&
-                           (sheet3.length === 0 || (colM3 && colCashRep));
-        if (canAutoRun) {
-          executeReconciliation(data, sheet2, sheet3, colM1, colM2, colAcc, colRep, colM3, colCashAcc, colCashRep, emptyRepFallback);
-        }
-      }, 300);
+      const canAutoRun = (sheet2.length > 0 || sheet3.length > 0) &&
+                         colM1 &&
+                         (sheet2.length === 0 || (colM2 && colRep)) &&
+                         (sheet3.length === 0 || (colM3 && colCashRep));
+      if (canAutoRun) {
+        executeReconciliation(data, sheet2, sheet3, colM1, colM2, colAcc, colRep, colM3, colCashAcc, colCashRep, emptyRepFallback);
+      }
     } catch (err: any) {
       console.error(err);
       setIsSheet1Loading(false);
-      setProgressState((p) => ({ ...p, isOpen: false }));
       showToast(`❌ تعذر قراءة الملف: ${err?.message || 'يرجى التأكد من صيغة Excel أو CSV.'}`);
     }
   };
@@ -574,52 +522,30 @@ export default function App() {
   // Handle Sheet 2 upload (Payments Sheet)
   const handleSheet2Upload = async (file: File) => {
     setIsSheet2Loading(true);
-    setProgressState({
-      isOpen: true,
-      title: 'قراءة',
-      fileName: file.name,
-      subtitle: 'جاري تحليل خلايا وسجلات ملف الإكسل...',
-      percent: 40,
-      stepText: 'استخراج حسابات المدفوعات وربطها بالماكينات...',
-      countText: '',
-      isComplete: false,
-    });
 
     try {
       const data = await parseExcelFile(file);
       if (!data || data.length === 0) {
         setIsSheet2Loading(false);
-        setProgressState((p) => ({ ...p, isOpen: false }));
         showToast('⚠️ لم يتم العثور على أسطر بيانات صالحة في شيت المدفوعات «' + file.name + '».');
         return;
       }
 
       setSheet2(data);
       setSheet2FileName(file.name);
+      setIsSheet2Loading(false);
+      showToast(`⚡ تم قراءة شيت المدفوعات فوراً (${data.length.toLocaleString('ar-EG')} سجل).`);
 
-      setProgressState((p) => ({
-        ...p,
-        percent: 100,
-        stepText: `تم قراءة ${data.length} سجل مدفوعات بنجاح!`,
-        isComplete: true,
-      }));
-
-      setTimeout(() => {
-        setIsSheet2Loading(false);
-        setProgressState((p) => ({ ...p, isOpen: false }));
-        showToast(`✅ تم قراءة شيت المدفوعات بنجاح (${data.length.toLocaleString('ar-EG')} سجل).`);
-        const canAutoRun = sheet1.length > 0 &&
-                           colM1 &&
-                           (colM2 && colRep) &&
-                           (sheet3.length === 0 || (colM3 && colCashRep));
-        if (canAutoRun) {
-          executeReconciliation(sheet1, data, sheet3, colM1, colM2, colAcc, colRep, colM3, colCashAcc, colCashRep, emptyRepFallback);
-        }
-      }, 300);
+      const canAutoRun = sheet1.length > 0 &&
+                         colM1 &&
+                         (colM2 && colRep) &&
+                         (sheet3.length === 0 || (colM3 && colCashRep));
+      if (canAutoRun) {
+        executeReconciliation(sheet1, data, sheet3, colM1, colM2, colAcc, colRep, colM3, colCashAcc, colCashRep, emptyRepFallback);
+      }
     } catch (err: any) {
       console.error(err);
       setIsSheet2Loading(false);
-      setProgressState((p) => ({ ...p, isOpen: false }));
       showToast(`❌ تعذر قراءة شيت المدفوعات: ${err?.message || 'يرجى التأكد من صيغة الملف.'}`);
     }
   };
@@ -627,52 +553,30 @@ export default function App() {
   // Handle Sheet 3 upload (Cash Sheet)
   const handleSheet3Upload = async (file: File) => {
     setIsSheet3Loading(true);
-    setProgressState({
-      isOpen: true,
-      title: 'قراءة',
-      fileName: file.name,
-      subtitle: 'جاري تحليل خلايا وسجلات شيت الكاش...',
-      percent: 40,
-      stepText: 'استخراج حسابات الكاش وربطها بالماكينات...',
-      countText: '',
-      isComplete: false,
-    });
 
     try {
       const data = await parseExcelFile(file);
       if (!data || data.length === 0) {
         setIsSheet3Loading(false);
-        setProgressState((p) => ({ ...p, isOpen: false }));
         showToast('⚠️ لم يتم العثور على أسطر بيانات صالحة في شيت الكاش «' + file.name + '».');
         return;
       }
 
       setSheet3(data);
       setSheet3FileName(file.name);
+      setIsSheet3Loading(false);
+      showToast(`⚡ تم قراءة شيت الكاش فوراً (${data.length.toLocaleString('ar-EG')} سجل).`);
 
-      setProgressState((p) => ({
-        ...p,
-        percent: 100,
-        stepText: `تم قراءة ${data.length} سجل كاش بنجاح!`,
-        isComplete: true,
-      }));
-
-      setTimeout(() => {
-        setIsSheet3Loading(false);
-        setProgressState((p) => ({ ...p, isOpen: false }));
-        showToast(`✅ تم قراءة شيت الكاش بنجاح (${data.length.toLocaleString('ar-EG')} سجل).`);
-        const canAutoRun = sheet1.length > 0 &&
-                           colM1 &&
-                           (sheet2.length === 0 || (colM2 && colRep)) &&
-                           (colM3 && colCashRep);
-        if (canAutoRun) {
-          executeReconciliation(sheet1, sheet2, data, colM1, colM2, colAcc, colRep, colM3, colCashAcc, colCashRep, emptyRepFallback);
-        }
-      }, 300);
+      const canAutoRun = sheet1.length > 0 &&
+                         colM1 &&
+                         (sheet2.length === 0 || (colM2 && colRep)) &&
+                         (colM3 && colCashRep);
+      if (canAutoRun) {
+        executeReconciliation(sheet1, sheet2, data, colM1, colM2, colAcc, colRep, colM3, colCashAcc, colCashRep, emptyRepFallback);
+      }
     } catch (err: any) {
       console.error(err);
       setIsSheet3Loading(false);
-      setProgressState((p) => ({ ...p, isOpen: false }));
       showToast(`❌ تعذر قراءة شيت الكاش: ${err?.message || 'يرجى التأكد من صيغة الملف.'}`);
     }
   };
@@ -774,6 +678,7 @@ export default function App() {
     setSelectedMachines(new Set());
     setSearchQuery('');
     setCurrentFilter('all');
+    setAccountTypeFilter('all');
     setCurrentPage(1);
     setCurrentTab(1);
     showToast('🗑️ تم مسح كافة البيانات وتفريغ النظام بالكامل.');
@@ -957,11 +862,22 @@ export default function App() {
     return sheet1;
   }, [sheet1, sheet1PreviewFilter, colM1]);
 
-  // Filtered rows for Tab 4
+  // Tab 5 reconciliation rows counts by type
+  const cashRowsCount = useMemo(() => {
+    return expandedRows.filter((r) => r.type === 'cash').length;
+  }, [expandedRows]);
+
+  const paymentsRowsCount = useMemo(() => {
+    return expandedRows.filter((r) => r.type === 'payment').length;
+  }, [expandedRows]);
+
+  // Filtered rows for Tab 5
   const filteredRows = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
     return expandedRows.filter((item) => {
       if (currentFilter !== 'all' && item.status !== currentFilter) return false;
+      if (accountTypeFilter === 'cash' && item.type !== 'cash') return false;
+      if (accountTypeFilter === 'payments' && item.type !== 'payment') return false;
       if (q) {
         const matchM = item.machine.toLowerCase().includes(q);
         const matchAcc = item.account.toLowerCase().includes(q);
@@ -970,7 +886,7 @@ export default function App() {
       }
       return true;
     });
-  }, [expandedRows, currentFilter, searchQuery]);
+  }, [expandedRows, currentFilter, accountTypeFilter, searchQuery]);
 
   // Paginated slice
   const maxPages = Math.max(1, Math.ceil(filteredRows.length / pageSize));
@@ -1011,7 +927,7 @@ export default function App() {
     setCardsScrollTop(0);
     if (tableContainerRef.current) tableContainerRef.current.scrollTop = 0;
     if (cardsContainerRef.current) cardsContainerRef.current.scrollTop = 0;
-  }, [currentPage, searchQuery, currentFilter, viewMode]);
+  }, [currentPage, searchQuery, currentFilter, accountTypeFilter, viewMode]);
 
   // Memoized table virtualization parameters
   const tableVirtualState = useMemo(() => {
@@ -2815,9 +2731,61 @@ export default function App() {
                   </div>
                 </div>
 
-                {/* Left Side: Filter Buttons Capsule + Excel Export Button */}
+                {/* Left Side: Filter Buttons Capsules + Excel Export Button */}
                 <div className="flex items-center gap-3 w-full lg:w-auto justify-end flex-wrap">
-                  {/* Filter Buttons Capsule */}
+                  
+                  {/* Account Type Filter Capsule (Cash vs Payments) */}
+                  <div className="inline-flex rounded-xl p-1 bg-slate-900 border border-slate-800 text-xs font-bold shrink-0 flex-wrap">
+                    <button
+                      onClick={() => {
+                        setAccountTypeFilter('all');
+                        setCurrentPage(1);
+                      }}
+                      className={`px-3 py-1.5 rounded-lg transition-all cursor-pointer ${
+                        accountTypeFilter === 'all'
+                          ? 'bg-indigo-600 text-white shadow-sm'
+                          : 'text-slate-300 hover:text-white'
+                      }`}
+                    >
+                      كافة الحسابات
+                    </button>
+                    <button
+                      onClick={() => {
+                        setAccountTypeFilter('cash');
+                        setCurrentPage(1);
+                      }}
+                      className={`px-3 py-1.5 rounded-lg flex items-center gap-1.5 transition-all cursor-pointer ${
+                        accountTypeFilter === 'cash'
+                          ? 'bg-emerald-600 text-white shadow-md shadow-emerald-600/30'
+                          : 'text-slate-300 hover:text-emerald-400'
+                      }`}
+                      title="عرض ماكينات الكاش فقط ببادئة 7-"
+                    >
+                      <span>💵 ماكينات الكاش فقط</span>
+                      <span className="px-1.5 py-0.2 rounded-full bg-emerald-950/50 text-emerald-300 text-[10px] font-mono font-bold">
+                        {cashRowsCount}
+                      </span>
+                    </button>
+                    <button
+                      onClick={() => {
+                        setAccountTypeFilter('payments');
+                        setCurrentPage(1);
+                      }}
+                      className={`px-3 py-1.5 rounded-lg flex items-center gap-1.5 transition-all cursor-pointer ${
+                        accountTypeFilter === 'payments'
+                          ? 'bg-blue-600 text-white shadow-md shadow-blue-600/30'
+                          : 'text-slate-300 hover:text-blue-400'
+                      }`}
+                      title="عرض ماكينات المدفوعات فقط بدون 7-"
+                    >
+                      <span>💳 ماكينات المدفوعات فقط</span>
+                      <span className="px-1.5 py-0.2 rounded-full bg-blue-950/50 text-blue-300 text-[10px] font-mono font-bold">
+                        {paymentsRowsCount}
+                      </span>
+                    </button>
+                  </div>
+
+                  {/* Status Filter Buttons Capsule */}
                   <div className="inline-flex rounded-xl p-1 bg-slate-900 border border-slate-800 text-xs font-bold shrink-0 flex-wrap">
                     <button
                       onClick={() => {

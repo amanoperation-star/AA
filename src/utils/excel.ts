@@ -2,19 +2,93 @@ import * as XLSX from 'xlsx';
 import { ExpandedRow, SheetRow } from '../types';
 
 export async function parseExcelFile(file: File): Promise<SheetRow[]> {
+  const isCsv = file.name.toLowerCase().endsWith('.csv');
+
+  // Fast-path for CSV files using direct text processing
+  if (isCsv) {
+    try {
+      const text = await file.text();
+      const lines = text.split(/\r\n|\n|\r/);
+      if (lines.length > 0) {
+        let headerRowIdx = -1;
+        let headers: string[] = [];
+
+        for (let i = 0; i < Math.min(lines.length, 12); i++) {
+          const line = lines[i].trim();
+          if (!line) continue;
+          const cols = line.split(',').map((c) => c.replace(/^["']|["']$/g, '').trim());
+          if (cols.some((c) => /ماكينة|جهاز|pos|machine|sn|id|كود|حساب|مندوب|اسم|فرع|code|acc|name/i.test(c))) {
+            headerRowIdx = i;
+            headers = cols;
+            break;
+          }
+        }
+
+        if (headerRowIdx === -1 && lines.length > 0) {
+          headerRowIdx = 0;
+          headers = lines[0].split(',').map((c, colIdx) => c.replace(/^["']|["']$/g, '').trim() || `عمود_${colIdx + 1}`);
+        }
+
+        const rows: SheetRow[] = [];
+        for (let i = headerRowIdx + 1; i < lines.length; i++) {
+          const line = lines[i].trim();
+          if (!line) continue;
+          const cols = line.split(',').map((c) => c.replace(/^["']|["']$/g, '').trim());
+          const rowObj: SheetRow = {};
+          let hasData = false;
+
+          for (let c = 0; c < headers.length; c++) {
+            const val = cols[c] !== undefined ? cols[c] : '';
+            const h = headers[c];
+            rowObj[h] = val;
+            if (val !== '') hasData = true;
+          }
+
+          if (hasData) rows.push(rowObj);
+        }
+
+        if (rows.length > 0) return rows;
+      }
+    } catch (e) {
+      // Fallback to XLSX parser if text parsing fails
+    }
+  }
+
   const buffer = await file.arrayBuffer();
   let workbook: XLSX.WorkBook | null = null;
 
   try {
-    workbook = XLSX.read(new Uint8Array(buffer), { type: 'array', codepage: 65001 });
+    workbook = XLSX.read(new Uint8Array(buffer), {
+      type: 'array',
+      codepage: 65001,
+      cellDates: false,
+      cellStyles: false,
+      cellFormula: false,
+      sheetStubs: false,
+      dense: true,
+    });
   } catch (err1) {
     try {
       const text = new TextDecoder('utf-8').decode(buffer);
-      workbook = XLSX.read(text, { type: 'string' });
+      workbook = XLSX.read(text, {
+        type: 'string',
+        cellDates: false,
+        cellStyles: false,
+        cellFormula: false,
+        sheetStubs: false,
+        dense: true,
+      });
     } catch (err2) {
       try {
         const text1256 = new TextDecoder('windows-1256').decode(buffer);
-        workbook = XLSX.read(text1256, { type: 'string' });
+        workbook = XLSX.read(text1256, {
+          type: 'string',
+          cellDates: false,
+          cellStyles: false,
+          cellFormula: false,
+          sheetStubs: false,
+          dense: true,
+        });
       } catch (err3) {
         throw new Error('تعذر قراءة صيغة الملف، يرجى التأكد من صلاحية ملف الإكسل أو CSV.');
       }
@@ -27,7 +101,7 @@ export async function parseExcelFile(file: File): Promise<SheetRow[]> {
 
   const extractRowsFromWorksheet = (worksheet: XLSX.WorkSheet): SheetRow[] => {
     if (!worksheet || !worksheet['!ref']) return [];
-    const aoa = XLSX.utils.sheet_to_json<any[]>(worksheet, { header: 1, defval: '', raw: false });
+    const aoa = XLSX.utils.sheet_to_json<any[]>(worksheet, { header: 1, defval: '', raw: true });
     if (!aoa || aoa.length === 0) return [];
 
     let headerRowIdx = -1;
