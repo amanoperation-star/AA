@@ -918,8 +918,8 @@ export default function App() {
         </div>
 
         {/* Info & Status Cards */}
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-          <div className="lg:col-span-8 bg-gradient-to-br from-slate-900 via-indigo-950 to-slate-950 text-white rounded-3xl p-6 shadow-xl border border-slate-800 flex flex-col justify-between">
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-stretch">
+          <div className="lg:col-span-5 bg-gradient-to-br from-slate-900 via-indigo-950 to-slate-950 text-white rounded-3xl p-6 shadow-xl border border-slate-800 flex flex-col justify-between">
             <div>
               <div className="flex flex-wrap items-center gap-2 mb-2">
                 <span className="px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-indigo-500/20 text-indigo-300 border border-indigo-500/30">
@@ -964,83 +964,222 @@ export default function App() {
             </div>
           </div>
 
-          <div className="lg:col-span-4 bg-[#0a0f1d] border border-slate-800 rounded-3xl p-5 shadow-xl flex flex-col justify-between">
-            <div className="space-y-3">
-              <h3 className="font-black text-white text-xs flex items-center justify-between">
-                <span>حالة الملفات المحملة</span>
+          {/* User's Exact Custom Container: حالة الملفات المحملة */}
+          <div className="lg:col-span-7 bg-slate-900/90 border border-slate-700/60 rounded-2xl p-6 shadow-2xl backdrop-blur-md space-y-6 flex flex-col justify-between">
+            {/* Top Header & Status */}
+            <div className="flex items-center justify-between border-b border-slate-800 pb-4">
+              <span
+                className={`inline-flex items-center gap-2 px-3 py-1 rounded-full text-xs font-semibold border ${
+                  sheet1.length > 0 && sheet2.length > 0
+                    ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30'
+                    : 'bg-amber-500/10 text-amber-400 border-amber-500/30'
+                }`}
+              >
                 <span
-                  className={`text-[10px] font-bold px-2.5 py-0.5 rounded-md border ${
-                    sheet1.length && sheet2.length
-                      ? 'text-emerald-400 bg-[#08201a] border-emerald-500/30'
-                      : 'text-amber-400 bg-amber-950/60 border-amber-500/30'
+                  className={`w-2 h-2 rounded-full ${
+                    sheet1.length > 0 && sheet2.length > 0
+                      ? 'bg-emerald-400 animate-pulse'
+                      : 'bg-amber-400 animate-pulse'
                   }`}
-                >
-                  {sheet1.length && sheet2.length ? 'جاهز للمطابقة' : 'بانتظار الملفات'}
-                </span>
-              </h3>
+                />
+                {sheet1.length > 0 && sheet2.length > 0 ? 'جاهز للمطابقة' : 'بانتظار الملفات'}
+              </span>
+              <h2 className="text-lg font-bold text-slate-100">حالة الملفات المحملة</h2>
+            </div>
 
-              {/* Item 1: Sheet 1 */}
-              <div className="flex items-center justify-between p-3.5 rounded-2xl bg-[#0e1628] border border-slate-800/90 shadow-sm">
-                <div className="flex items-center gap-3">
-                  <Calculator className="w-5 h-5 text-blue-400 shrink-0" />
-                  <div>
-                    <span className="text-xs font-black text-white block">1. شيت الماكينات</span>
-                    <span
-                      className={`text-[11px] block font-mono mt-0.5 max-w-[170px] truncate ${
-                        sheet1.length ? 'text-slate-300 font-semibold' : 'text-slate-500'
-                      }`}
-                      dir={sheet1.length ? 'ltr' : 'rtl'}
-                    >
-                      {sheet1.length ? (sheet1FileName || 'شيت_الماكينات.xlsx') : 'لم يتم الرفع'}
-                    </span>
-                  </div>
-                </div>
-                {sheet1.length > 0 ? (
-                  <span className="text-[11px] font-mono font-bold text-emerald-400 bg-[#08201a] border border-emerald-500/30 px-2.5 py-1 rounded-lg">
-                    تم ({sheet1.length.toLocaleString()})
-                  </span>
-                ) : (
-                  <span className="text-[11px] font-bold text-rose-400 bg-[#200d14] border border-rose-500/30 px-2.5 py-1 rounded-lg">
-                    غير مرفوع
-                  </span>
-                )}
+            {/* Stepper / Progress Bar */}
+            <div className="relative flex items-center justify-between px-8 text-xs text-slate-400">
+              <div className="absolute left-8 right-8 top-1/2 -translate-y-1/2 h-0.5 bg-slate-800 -z-0" />
+
+              <div className="flex flex-col items-center gap-1 z-10 bg-slate-900 px-2">
+                <span
+                  className={`w-3 h-3 rounded-full border-2 border-slate-900 ${
+                    expandedRows.length > 0 ? 'bg-emerald-400 ring-4 ring-emerald-400/20' : 'bg-slate-700'
+                  }`}
+                />
+                <span className={expandedRows.length > 0 ? 'text-emerald-400 font-semibold' : ''}>إكتمال</span>
               </div>
-
-              {/* Item 2: Sheet 2 */}
-              <div className="flex items-center justify-between p-3.5 rounded-2xl bg-[#0e1628] border border-slate-800/90 shadow-sm">
-                <div className="flex items-center gap-3">
-                  <Users className="w-5 h-5 text-blue-400 shrink-0" />
-                  <div>
-                    <span className="text-xs font-black text-white block">2. شيت المناديب والحسابات</span>
-                    <span
-                      className={`text-[11px] block font-mono mt-0.5 max-w-[170px] truncate ${
-                        sheet2.length ? 'text-slate-300 font-semibold' : 'text-slate-500'
-                      }`}
-                      dir={sheet2.length ? 'ltr' : 'rtl'}
-                    >
-                      {sheet2.length ? (sheet2FileName || 'شيت_المناديب.xlsx') : 'لم يتم الرفع'}
-                    </span>
-                  </div>
-                </div>
-                {sheet2.length > 0 ? (
-                  <span className="text-[11px] font-mono font-bold text-emerald-400 bg-[#08201a] border border-emerald-500/30 px-2.5 py-1 rounded-lg">
-                    تم ({sheet2.length.toLocaleString()})
-                  </span>
-                ) : (
-                  <span className="text-[11px] font-bold text-rose-400 bg-[#200d14] border border-rose-500/30 px-2.5 py-1 rounded-lg">
-                    غير مرفوع
-                  </span>
-                )}
+              <div className="flex flex-col items-center gap-1 z-10 bg-slate-900 px-2">
+                <span
+                  className={`w-3 h-3 rounded-full border-2 border-slate-900 ${
+                    sheet1.length > 0 && sheet2.length > 0 ? 'bg-indigo-400 ring-4 ring-indigo-400/20' : 'bg-slate-700'
+                  }`}
+                />
+                <span className={sheet1.length > 0 && sheet2.length > 0 ? 'text-indigo-400 font-semibold' : ''}>
+                  مطابقة
+                </span>
+              </div>
+              <div className="flex flex-col items-center gap-1 z-10 bg-slate-900 px-2 text-cyan-400">
+                <span className="w-3 h-3 rounded-full bg-cyan-400 ring-4 ring-cyan-400/20 border-2 border-slate-900" />
+                <span className="font-semibold">رفع</span>
               </div>
             </div>
 
-            <button
-              onClick={runReconciliation}
-              className="mt-4 w-full bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-black py-3 px-4 rounded-2xl shadow-lg shadow-indigo-600/30 transition-all flex items-center justify-center gap-2 cursor-pointer"
-            >
-              <Zap className="w-4 h-4 text-amber-300" />
-              <span>بدء مطابقة وتفصيل أسطر المناديب O(1)</span>
-            </button>
+            {/* Cards Grid Side-by-Side */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {/* Card 1: Sheet 1 */}
+              <div
+                className={`p-4 rounded-xl shadow-lg flex items-center justify-between gap-3 relative overflow-hidden border ${
+                  sheet1.length > 0
+                    ? 'bg-slate-800/60 border-emerald-500/40 shadow-emerald-500/5'
+                    : 'bg-slate-800/40 border-rose-500/40 shadow-rose-500/5'
+                }`}
+              >
+                <div className="p-3 bg-cyan-500/10 border border-cyan-500/20 rounded-xl text-cyan-400 shrink-0">
+                  <svg className="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <rect x="4" y="2" width="16" height="20" rx="2" strokeWidth="1.8" />
+                    <line x1="8" y1="6" x2="16" y2="6" strokeWidth="1.8" />
+                    <line x1="8" y1="10" x2="10" y2="10" strokeWidth="1.8" />
+                    <line x1="14" y1="10" x2="16" y2="10" strokeWidth="1.8" />
+                    <line x1="8" y1="14" x2="10" y2="14" strokeWidth="1.8" />
+                    <line x1="14" y1="14" x2="16" y2="14" strokeWidth="1.8" />
+                    <line x1="8" y1="18" x2="16" y2="18" strokeWidth="1.8" />
+                  </svg>
+                </div>
+                <div className="flex-1 text-right min-w-0">
+                  <h3 className="text-sm font-bold text-slate-100 truncate">1. شيت الماكينات</h3>
+                  <p
+                    className={`text-xs mt-0.5 truncate ${
+                      sheet1.length > 0 ? 'text-emerald-400 font-semibold' : 'text-slate-400'
+                    }`}
+                  >
+                    {sheet1.length > 0
+                      ? `${sheet1.length.toLocaleString('ar-EG')} ماكينة`
+                      : 'لم يتم الرفع'}
+                  </p>
+                </div>
+                <div className="flex flex-col items-end gap-2 shrink-0">
+                  {sheet1.length > 0 ? (
+                    <button
+                      onClick={() => {
+                        setSheet1([]);
+                        setSheet1FileName('');
+                        showToast('🗑️ تم إفراغ شيت الماكينات');
+                      }}
+                      className="p-1 rounded-full bg-rose-500/20 text-rose-400 hover:bg-rose-500/30 transition-colors cursor-pointer"
+                      title="إفراغ الملف"
+                    >
+                      <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" />
+                      </svg>
+                    </button>
+                  ) : (
+                    <div className="p-1 rounded-full bg-rose-500/10 text-rose-400">
+                      <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" />
+                      </svg>
+                    </div>
+                  )}
+                  <label className="px-3 py-1 text-xs font-semibold rounded-lg bg-slate-700/60 hover:bg-slate-700 text-slate-200 border border-slate-600/50 cursor-pointer transition-colors">
+                    <input
+                      type="file"
+                      accept=".xlsx, .xls, .csv"
+                      className="hidden"
+                      onChange={(e) => {
+                        if (e.target.files?.length) {
+                          handleSheet1Upload(e.target.files[0]);
+                        }
+                      }}
+                    />
+                    {sheet1.length > 0 ? 'تغيير الملف' : 'إضافة ملف'}
+                  </label>
+                </div>
+              </div>
+
+              {/* Card 2: Sheet 2 */}
+              <div
+                className={`p-4 rounded-xl shadow-lg flex items-center justify-between gap-3 relative overflow-hidden border ${
+                  sheet2.length > 0
+                    ? 'bg-slate-800/60 border-emerald-500/40 shadow-emerald-500/5'
+                    : 'bg-slate-800/40 border-rose-500/40 shadow-rose-500/5'
+                }`}
+              >
+                <div className="p-3 bg-cyan-500/10 border border-cyan-500/20 rounded-xl text-cyan-400 shrink-0">
+                  <svg className="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth="1.8"
+                      d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5 5 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z"
+                    />
+                  </svg>
+                </div>
+                <div className="flex-1 text-right min-w-0">
+                  <h3 className="text-sm font-bold text-slate-100 truncate">2. شيت المناديب والحسابات</h3>
+                  <p
+                    className={`text-xs mt-0.5 truncate ${
+                      sheet2.length > 0 ? 'text-emerald-400 font-semibold' : 'text-slate-400'
+                    }`}
+                  >
+                    {sheet2.length > 0
+                      ? `${sheet2.length.toLocaleString('ar-EG')} سجل توزيع`
+                      : 'لم يتم الرفع'}
+                  </p>
+                </div>
+                <div className="flex flex-col items-end gap-2 shrink-0">
+                  {sheet2.length > 0 ? (
+                    <button
+                      onClick={() => {
+                        setSheet2([]);
+                        setSheet2FileName('');
+                        showToast('🗑️ تم إفراغ شيت المناديب');
+                      }}
+                      className="p-1 rounded-full bg-rose-500/20 text-rose-400 hover:bg-rose-500/30 transition-colors cursor-pointer"
+                      title="إفراغ الملف"
+                    >
+                      <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" />
+                      </svg>
+                    </button>
+                  ) : (
+                    <div className="p-1 rounded-full bg-rose-500/10 text-rose-400">
+                      <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" />
+                      </svg>
+                    </div>
+                  )}
+                  <label className="px-3 py-1 text-xs font-semibold rounded-lg bg-slate-700/60 hover:bg-slate-700 text-slate-200 border border-slate-600/50 cursor-pointer transition-colors">
+                    <input
+                      type="file"
+                      accept=".xlsx, .xls, .csv"
+                      className="hidden"
+                      onChange={(e) => {
+                        if (e.target.files?.length) {
+                          handleSheet2Upload(e.target.files[0]);
+                        }
+                      }}
+                    />
+                    {sheet2.length > 0 ? 'تغيير الملف' : 'إضافة ملف'}
+                  </label>
+                </div>
+              </div>
+            </div>
+
+            {/* Bottom Actions Area */}
+            <div className="flex items-center justify-between pt-2 flex-wrap gap-3">
+              <button
+                onClick={() => setIsResetConfirmOpen(true)}
+                className="text-xs text-slate-400 hover:text-slate-200 transition-colors cursor-pointer"
+              >
+                إلغاء
+              </button>
+              <button
+                onClick={handleLoadSample}
+                className="text-xs text-slate-400 hover:text-slate-200 transition-colors cursor-pointer"
+              >
+                المزيد من الخيارات (عينة فورية)
+              </button>
+
+              <button
+                onClick={runReconciliation}
+                className="py-2.5 px-5 rounded-xl font-bold text-sm bg-indigo-600 hover:bg-indigo-500 text-white shadow-lg shadow-indigo-500/25 transition-all flex items-center gap-2 cursor-pointer"
+              >
+                <svg className="w-4 h-4 text-indigo-200" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 10V3L4 14h7v7l9-11h-7z" />
+                </svg>
+                <span>بدء مطابقة وتفصيل أسطر المناديب ({expandedRows.length})</span>
+              </button>
+            </div>
           </div>
         </div>
 
