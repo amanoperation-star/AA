@@ -2,6 +2,7 @@ export interface RepEntry {
   account: string;
   name: string;
   isMissingRepName: boolean;
+  type: 'payment' | 'cash';
 }
 
 export interface MachineSummary {
@@ -24,6 +25,7 @@ export interface ExpandedRow {
   isFirstOfGroup: boolean;
   isLastOfGroup: boolean;
   isMissingRepName: boolean;
+  type: 'payment' | 'cash';
 }
 
 export interface SheetRow {

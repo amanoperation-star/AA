@@ -39,6 +39,18 @@ import { ProgressModal } from './components/ProgressModal';
 import { OfflineIndicator } from './components/OfflineIndicator';
 import { DesktopAppTab } from './components/DesktopAppTab';
 
+function normalizeMachineId(id: string | number | undefined | null): string {
+  if (id === undefined || id === null) return '';
+  let clean = String(id).trim();
+  // Remove "7-" or "٧-" prefixes
+  if (clean.startsWith('7-')) {
+    clean = clean.substring(2).trim();
+  } else if (clean.startsWith('٧-')) {
+    clean = clean.substring(2).trim();
+  }
+  return clean;
+}
+
 export default function App() {
   // Theme state with localStorage persistence
   const [isDarkMode, setIsDarkMode] = useState<boolean>(() => {
@@ -72,26 +84,34 @@ export default function App() {
     }, 3200);
   };
 
-  // Sheets data
+  // Sheets data (1: Machines, 2: Payments, 3: Cash)
   const [sheet1, setSheet1] = useState<SheetRow[]>([]);
   const [sheet2, setSheet2] = useState<SheetRow[]>([]);
+  const [sheet3, setSheet3] = useState<SheetRow[]>([]);
   const [sheet1FileName, setSheet1FileName] = useState<string>('');
   const [sheet2FileName, setSheet2FileName] = useState<string>('');
+  const [sheet3FileName, setSheet3FileName] = useState<string>('');
 
   // Upload card interactive states & refs
   const [isSheet1Loading, setIsSheet1Loading] = useState<boolean>(false);
   const [isSheet2Loading, setIsSheet2Loading] = useState<boolean>(false);
+  const [isSheet3Loading, setIsSheet3Loading] = useState<boolean>(false);
   const [isDragging1, setIsDragging1] = useState<boolean>(false);
   const [isDragging2, setIsDragging2] = useState<boolean>(false);
+  const [isDragging3, setIsDragging3] = useState<boolean>(false);
   const sheet1InputRef = useRef<HTMLInputElement>(null);
   const sheet2InputRef = useRef<HTMLInputElement>(null);
+  const sheet3InputRef = useRef<HTMLInputElement>(null);
 
-  // Column mapping
+  // Column mapping (Machines, Payments, Cash)
   const [colM1, setColM1] = useState<string>('');
   const [colM2, setColM2] = useState<string>('');
   const [colAcc, setColAcc] = useState<string>('');
   const [colRep, setColRep] = useState<string>('');
-  const [emptyRepFallback, setEmptyRepFallback] = useState<string>('لا يوجد مندوب');
+  const [colM3, setColM3] = useState<string>('');
+  const [colCashAcc, setColCashAcc] = useState<string>('');
+  const [colCashRep, setColCashRep] = useState<string>('');
+  const [emptyRepFallback, setEmptyRepFallback] = useState<string>('لا يوجد مسؤول');
 
   // Reconciliation results
   const [machinesResults, setMachinesResults] = useState<MachineSummary[]>([]);
@@ -208,26 +228,49 @@ export default function App() {
       setColAcc(foundAcc);
       setColRep(foundRep);
     }
-  }, [sheet1, sheet2]);
 
-  // Core Reconciliation Engine
+    if (sheet3.length > 0) {
+      const cols3 = Object.keys(sheet3[0]);
+      const foundM3 = cols3.find((c) => /ماكينة|جهاز|pos|machine|sn/i.test(c)) || cols3[0];
+      const foundCashAcc = cols3.find((c) => /حساب|كود|رقم.*مندوب|account|acc|code/i.test(c)) || '';
+      let foundCashRep = cols3.find((c) => /اسم.*مندوب|اسم.*العميل|اسم.*المستخدم|اسم|rep.*name|agent.*name|name/i.test(c));
+      if (!foundCashRep) {
+        foundCashRep = cols3.find((c) => /(مندوب|agent|rep)/i.test(c) && !/(رقم|حساب|كود|acc|code|id)/i.test(c));
+      }
+      if (!foundCashRep) {
+        foundCashRep = cols3.find((c) => /(مندوب|agent|rep)/i.test(c)) || cols3[1] || cols3[0];
+      }
+
+      setColM3(foundM3);
+      setColCashAcc(foundCashAcc);
+      setColCashRep(foundCashRep);
+    }
+  }, [sheet1, sheet2, sheet3]);
+
+  // Core Reconciliation Engine (Supports Sheet 1: Machines, Sheet 2: Payments, Sheet 3: Cash)
   const executeReconciliation = (
     s1: SheetRow[],
     s2: SheetRow[],
+    s3: SheetRow[],
     m1Name: string,
     m2Name: string,
     accName: string,
     repNameCol: string,
+    m3Name: string,
+    cashAccName: string,
+    cashRepNameCol: string,
     fallbackVal = emptyRepFallback
   ) => {
-    const repMap = new Map<string, Array<{ account: string; name: string; isMissingRepName: boolean }>>();
+    const repMap = new Map<string, Array<{ account: string; name: string; isMissingRepName: boolean; type: 'payment' | 'cash' }>>();
     const irregularsList: IrregularAccountItem[] = [];
 
+    // Process Sheet 2 (Payments)
     for (let i = 0; i < s2.length; i++) {
       const row = s2[i];
       const rawM = row[m2Name];
       if (rawM !== undefined && rawM !== null && rawM !== '') {
-        const key = String(rawM).trim();
+        const rawMStr = String(rawM).trim();
+        const key = normalizeMachineId(rawMStr);
         const rawRepName = row[repNameCol];
         const isRepNameEmpty =
           rawRepName === undefined ||
@@ -242,30 +285,62 @@ export default function App() {
             ? String(row[accName]).trim()
             : 'غير متوفر';
 
-        // Audit irregular account numbers
         if (repAcc !== 'غير متوفر') {
           const hasSpecialChars = /[^0-9\-_]/i.test(repAcc);
           const hasSpaces = /\s/.test(repAcc);
           const isUnusuallyShort = repAcc.length < 2;
           if (hasSpecialChars || hasSpaces || isUnusuallyShort) {
             irregularsList.push({
-              machine: key,
+              machine: rawMStr,
               account: repAcc,
               repName,
-              reason: hasSpaces
-                ? 'يحتوي على مسافات'
-                : hasSpecialChars
-                ? 'يحتوي على رموز/حروف'
-                : 'قصير جداً',
+              reason: hasSpaces ? 'يحتوي على مسافات (مدفوعات)' : hasSpecialChars ? 'يحتوي على رموز/حروف (مدفوعات)' : 'قصير جداً',
             });
           }
         }
 
-        if (!repMap.has(key)) {
-          repMap.set(key, []);
+        if (!repMap.has(key)) repMap.set(key, []);
+        repMap.get(key)!.push({ account: repAcc, name: repName, isMissingRepName: isRepNameEmpty, type: 'payment' });
+      }
+    }
+
+    // Process Sheet 3 (Cash)
+    for (let i = 0; i < s3.length; i++) {
+      const row = s3[i];
+      const rawM = row[m3Name];
+      if (rawM !== undefined && rawM !== null && rawM !== '') {
+        const rawMStr = String(rawM).trim();
+        const key = normalizeMachineId(rawMStr);
+        const rawRepName = row[cashRepNameCol];
+        const isRepNameEmpty =
+          rawRepName === undefined ||
+          rawRepName === null ||
+          String(rawRepName).trim() === '' ||
+          String(rawRepName).trim() === '-' ||
+          String(rawRepName).trim() === 'null';
+
+        const repName = isRepNameEmpty ? fallbackVal : String(rawRepName).trim();
+        const repAcc =
+          cashAccName && row[cashAccName] !== undefined && row[cashAccName] !== ''
+            ? String(row[cashAccName]).trim()
+            : 'غير متوفر';
+
+        if (repAcc !== 'غير متوفر') {
+          const hasSpecialChars = /[^0-9\-_]/i.test(repAcc);
+          const hasSpaces = /\s/.test(repAcc);
+          const isUnusuallyShort = repAcc.length < 2;
+          if (hasSpecialChars || hasSpaces || isUnusuallyShort) {
+            irregularsList.push({
+              machine: rawMStr,
+              account: repAcc,
+              repName,
+              reason: hasSpaces ? 'يحتوي على مسافات (كاش)' : hasSpecialChars ? 'يحتوي على رموز/حروف (كاش)' : 'قصير جداً',
+            });
+          }
         }
-        const arr = repMap.get(key)!;
-        arr.push({ account: repAcc, name: repName, isMissingRepName: isRepNameEmpty });
+
+        if (!repMap.has(key)) repMap.set(key, []);
+        repMap.get(key)!.push({ account: repAcc, name: repName, isMissingRepName: isRepNameEmpty, type: 'cash' });
       }
     }
 
@@ -295,17 +370,24 @@ export default function App() {
       const mVal = row[m1Name];
       if (mVal === undefined || mVal === null || mVal === '') continue;
 
-      const machineId = String(mVal).trim();
-      const reps = repMap.get(machineId) || [];
+      const originalMachineId = String(mVal).trim();
+      const lookupKey = normalizeMachineId(originalMachineId);
+      const reps = repMap.get(lookupKey) || [];
       const count = reps.length;
 
       let status: 'single' | 'multi' | 'none' = 'none';
       if (count === 1) status = 'single';
       else if (count > 1) status = 'multi';
 
+      // Check if machine starts with 7- or matches a cash representative
+      const isCashMachine = originalMachineId.startsWith('7-') || originalMachineId.startsWith('٧-') || reps.some(r => r.type === 'cash');
+      const displayMachineId = isCashMachine 
+        ? (originalMachineId.startsWith('7-') || originalMachineId.startsWith('٧-') ? originalMachineId : `7-${originalMachineId}`)
+        : originalMachineId;
+
       summaries.push({
         index: i + 1,
-        machine: machineId,
+        machine: displayMachineId,
         repCount: count,
         reps,
         status,
@@ -315,7 +397,7 @@ export default function App() {
         rowCounter++;
         flatRows.push({
           id: `row-${rowCounter}`,
-          machine: machineId,
+          machine: displayMachineId,
           account: 'غير متوفر',
           repName: fallbackVal,
           repOrder: 0,
@@ -325,6 +407,7 @@ export default function App() {
           isFirstOfGroup: true,
           isLastOfGroup: true,
           isMissingRepName: true,
+          type: isCashMachine ? 'cash' : 'payment',
         });
       } else {
         for (let rIdx = 0; rIdx < count; rIdx++) {
@@ -332,7 +415,7 @@ export default function App() {
           const r = reps[rIdx];
           flatRows.push({
             id: `row-${rowCounter}`,
-            machine: machineId,
+            machine: displayMachineId,
             account: r.account,
             repName: r.name,
             repOrder: rIdx + 1,
@@ -342,6 +425,7 @@ export default function App() {
             isFirstOfGroup: rIdx === 0,
             isLastOfGroup: rIdx === count - 1,
             isMissingRepName: r.isMissingRepName,
+            type: r.type,
           });
         }
       }
@@ -357,14 +441,31 @@ export default function App() {
 
   // Start reconciliation from user action
   const runReconciliation = () => {
-    if (!sheet1.length || !sheet2.length) {
-      showToast('⚠️ يرجى رفع شيت الماكينات وشيت المناديب أولاً، أو اضغط على «عينة فورية».');
+    if (!sheet1.length) {
+      showToast('⚠️ يرجى رفع شيت الماكينات أولاً، أو اضغط على «عينة فورية».');
       return;
     }
 
-    if (!colM1 || !colM2 || !colRep) {
-      showToast('⚠️ يرجى ضبط أعمدة الماكينة والمندوب في التبويب 3.');
-      setCurrentTab(3);
+    if (!sheet2.length && !sheet3.length) {
+      showToast('⚠️ يرجى رفع شيت المدفوعات أو شيت الكاش للمطابقة مع شيت الماكينات.');
+      return;
+    }
+
+    if (!colM1) {
+      showToast('⚠️ يرجى ضبط عمود الماكينة لشيت الماكينات في تبويب ضبط الأعمدة.');
+      setCurrentTab(4);
+      return;
+    }
+
+    if (sheet2.length > 0 && (!colM2 || !colRep)) {
+      showToast('⚠️ يرجى ضبط أعمدة الماكينة والمندوب لشيت المدفوعات في تبويب ضبط الأعمدة.');
+      setCurrentTab(4);
+      return;
+    }
+
+    if (sheet3.length > 0 && (!colM3 || !colCashRep)) {
+      showToast('⚠️ يرجى ضبط أعمدة الماكينة ومندوب الكاش لشيت الكاش في تبويب ضبط الأعمدة.');
+      setCurrentTab(4);
       return;
     }
 
@@ -387,7 +488,7 @@ export default function App() {
       }));
 
       setTimeout(() => {
-        executeReconciliation(sheet1, sheet2, colM1, colM2, colAcc, colRep, emptyRepFallback);
+        executeReconciliation(sheet1, sheet2, sheet3, colM1, colM2, colAcc, colRep, colM3, colCashAcc, colCashRep, emptyRepFallback);
         setProgressState((p) => ({
           ...p,
           percent: 100,
@@ -441,8 +542,12 @@ export default function App() {
         setIsSheet1Loading(false);
         setProgressState((p) => ({ ...p, isOpen: false }));
         showToast(`✅ تم قراءة شيت الماكينات بنجاح (${data.length.toLocaleString('ar-EG')} ماكينة).`);
-        if (sheet2.length > 0 && colM1 && colM2 && colRep) {
-          executeReconciliation(data, sheet2, colM1, colM2, colAcc, colRep, emptyRepFallback);
+        const canAutoRun = (sheet2.length > 0 || sheet3.length > 0) &&
+                           colM1 &&
+                           (sheet2.length === 0 || (colM2 && colRep)) &&
+                           (sheet3.length === 0 || (colM3 && colCashRep));
+        if (canAutoRun) {
+          executeReconciliation(data, sheet2, sheet3, colM1, colM2, colAcc, colRep, colM3, colCashAcc, colCashRep, emptyRepFallback);
         }
       }, 300);
     } catch (err: any) {
@@ -453,7 +558,7 @@ export default function App() {
     }
   };
 
-  // Handle Sheet 2 upload
+  // Handle Sheet 2 upload (Payments Sheet)
   const handleSheet2Upload = async (file: File) => {
     setIsSheet2Loading(true);
     setProgressState({
@@ -462,7 +567,7 @@ export default function App() {
       fileName: file.name,
       subtitle: 'جاري تحليل خلايا وسجلات ملف الإكسل...',
       percent: 40,
-      stepText: 'استخراج حسابات المناديب وربطها بالماكينات...',
+      stepText: 'استخراج حسابات المدفوعات وربطها بالماكينات...',
       countText: '',
       isComplete: false,
     });
@@ -472,7 +577,7 @@ export default function App() {
       if (!data || data.length === 0) {
         setIsSheet2Loading(false);
         setProgressState((p) => ({ ...p, isOpen: false }));
-        showToast('⚠️ لم يتم العثور على أسطر بيانات صالحة في «' + file.name + '». يرجى التأكد من محتوى الملف.');
+        showToast('⚠️ لم يتم العثور على أسطر بيانات صالحة في شيت المدفوعات «' + file.name + '».');
         return;
       }
 
@@ -482,23 +587,80 @@ export default function App() {
       setProgressState((p) => ({
         ...p,
         percent: 100,
-        stepText: `تم قراءة ${data.length} سجل مناديب بنجاح!`,
+        stepText: `تم قراءة ${data.length} سجل مدفوعات بنجاح!`,
         isComplete: true,
       }));
 
       setTimeout(() => {
         setIsSheet2Loading(false);
         setProgressState((p) => ({ ...p, isOpen: false }));
-        showToast(`✅ تم قراءة شيت المناديب والحسابات بنجاح (${data.length.toLocaleString('ar-EG')} سجل).`);
-        if (sheet1.length > 0 && colM1 && colM2 && colRep) {
-          executeReconciliation(sheet1, data, colM1, colM2, colAcc, colRep, emptyRepFallback);
+        showToast(`✅ تم قراءة شيت المدفوعات بنجاح (${data.length.toLocaleString('ar-EG')} سجل).`);
+        const canAutoRun = sheet1.length > 0 &&
+                           colM1 &&
+                           (colM2 && colRep) &&
+                           (sheet3.length === 0 || (colM3 && colCashRep));
+        if (canAutoRun) {
+          executeReconciliation(sheet1, data, sheet3, colM1, colM2, colAcc, colRep, colM3, colCashAcc, colCashRep, emptyRepFallback);
         }
       }, 300);
     } catch (err: any) {
       console.error(err);
       setIsSheet2Loading(false);
       setProgressState((p) => ({ ...p, isOpen: false }));
-      showToast(`❌ تعذر قراءة الملف: ${err?.message || 'يرجى التأكد من صيغة Excel أو CSV.'}`);
+      showToast(`❌ تعذر قراءة شيت المدفوعات: ${err?.message || 'يرجى التأكد من صيغة الملف.'}`);
+    }
+  };
+
+  // Handle Sheet 3 upload (Cash Sheet)
+  const handleSheet3Upload = async (file: File) => {
+    setIsSheet3Loading(true);
+    setProgressState({
+      isOpen: true,
+      title: 'قراءة',
+      fileName: file.name,
+      subtitle: 'جاري تحليل خلايا وسجلات شيت الكاش...',
+      percent: 40,
+      stepText: 'استخراج حسابات الكاش وربطها بالماكينات...',
+      countText: '',
+      isComplete: false,
+    });
+
+    try {
+      const data = await parseExcelFile(file);
+      if (!data || data.length === 0) {
+        setIsSheet3Loading(false);
+        setProgressState((p) => ({ ...p, isOpen: false }));
+        showToast('⚠️ لم يتم العثور على أسطر بيانات صالحة في شيت الكاش «' + file.name + '».');
+        return;
+      }
+
+      setSheet3(data);
+      setSheet3FileName(file.name);
+
+      setProgressState((p) => ({
+        ...p,
+        percent: 100,
+        stepText: `تم قراءة ${data.length} سجل كاش بنجاح!`,
+        isComplete: true,
+      }));
+
+      setTimeout(() => {
+        setIsSheet3Loading(false);
+        setProgressState((p) => ({ ...p, isOpen: false }));
+        showToast(`✅ تم قراءة شيت الكاش بنجاح (${data.length.toLocaleString('ar-EG')} سجل).`);
+        const canAutoRun = sheet1.length > 0 &&
+                           colM1 &&
+                           (sheet2.length === 0 || (colM2 && colRep)) &&
+                           (colM3 && colCashRep);
+        if (canAutoRun) {
+          executeReconciliation(sheet1, sheet2, data, colM1, colM2, colAcc, colRep, colM3, colCashAcc, colCashRep, emptyRepFallback);
+        }
+      }, 300);
+    } catch (err: any) {
+      console.error(err);
+      setIsSheet3Loading(false);
+      setProgressState((p) => ({ ...p, isOpen: false }));
+      showToast(`❌ تعذر قراءة شيت الكاش: ${err?.message || 'يرجى التأكد من صيغة الملف.'}`);
     }
   };
 
@@ -527,31 +689,47 @@ export default function App() {
       ];
 
       const sample2: SheetRow[] = [
-        { 'رقم الماكينة': 'POS-100', 'رقم حساب المندوب': '1234', 'اسم المندوب': 'أحمد محمود سالم' },
-        { 'رقم الماكينة': 'POS-100', 'رقم حساب المندوب': '456', 'اسم المندوب': 'محمود حسن رضوان' },
-        { 'رقم الماكينة': 'POS-200', 'رقم حساب المندوب': '555', 'اسم المندوب': '' },
-        { 'رقم الماكينة': 'POS-300', 'رقم حساب المندوب': '789', 'اسم المندوب': 'خالد عبد الرحمن' },
-        { 'رقم الماكينة': 'POS-300', 'رقم حساب المندوب': '890', 'اسم المندوب': 'طارق زياد العتيبي' },
-        { 'رقم الماكينة': 'POS-300', 'رقم حساب المندوب': '999', 'اسم المندوب': 'عمر فاروق الشامي' },
-        { 'رقم الماكينة': 'POS-400', 'رقم حساب المندوب': '777-ERR', 'اسم المندوب': 'إبراهيم حسني مراد' },
+        { 'رقم الماكينة': 'POS-100', 'رقم حساب المدفوعات': '1234', 'اسم مسؤول المدفوعات': 'أحمد محمود سالم' },
+        { 'رقم الماكينة': 'POS-100', 'رقم حساب المدفوعات': '456', 'اسم مسؤول المدفوعات': 'محمود حسن رضوان' },
+        { 'رقم الماكينة': 'POS-200', 'رقم حساب المدفوعات': '555', 'اسم مسؤول المدفوعات': '' },
+        { 'رقم الماكينة': 'POS-300', 'رقم حساب المدفوعات': '789', 'اسم مسؤول المدفوعات': 'خالد عبد الرحمن' },
+        { 'رقم الماكينة': 'POS-300', 'رقم حساب المدفوعات': '890', 'اسم مسؤول المدفوعات': 'طارق زياد العتيبي' },
+        { 'رقم الماكينة': 'POS-300', 'رقم حساب المدفوعات': '999', 'اسم مسؤول المدفوعات': 'عمر فاروق الشامي' },
+        { 'رقم الماكينة': 'POS-400', 'رقم حساب المدفوعات': '777-ERR', 'اسم مسؤول المدفوعات': 'إبراهيم حسني مراد' },
+      ];
+
+      const sample3: SheetRow[] = [
+        { 'رقم الماكينة': '7-POS-100', 'رقم حساب الكاش': '1234', 'اسم مسؤول الكاش': 'أحمد محمود سالم (كاش)' },
+        { 'رقم الماكينة': '7-POS-200', 'رقم حساب الكاش': '555', 'اسم مسؤول الكاش': 'خالد عبد الرحمن (كاش)' },
+        { 'رقم الماكينة': '7-POS-300', 'رقم حساب الكاش': '789', 'اسم مسؤول الكاش': 'طارق زياد العتيبي (كاش)' },
+        { 'رقم الماكينة': '7-POS-400', 'رقم حساب الكاش': '777', 'اسم مسؤول الكاش': 'سامح عبد الله كمال (كاش)' },
+        { 'رقم الماكينة': '7-POS-500', 'رقم حساب الكاش': '888', 'اسم مسؤول الكاش': 'مصطفى كمال (كاش)' },
       ];
 
       setSheet1(sample1);
       setSheet1FileName('عينة_شيت_الماكينات.xlsx');
       setSheet2(sample2);
-      setSheet2FileName('عينة_شيت_المناديب_والحسابات.xlsx');
+      setSheet2FileName('عينة_شيت_المدفوعات.xlsx');
+      setSheet3(sample3);
+      setSheet3FileName('عينة_شيت_الكاش.xlsx');
 
       const m1 = 'رقم الماكينة';
       const m2 = 'رقم الماكينة';
-      const acc = 'رقم حساب المندوب';
-      const rep = 'اسم المندوب';
+      const acc = 'رقم حساب المدفوعات';
+      const rep = 'اسم مسؤول المدفوعات';
+      const m3 = 'رقم الماكينة';
+      const cashAcc = 'رقم حساب الكاش';
+      const cashRep = 'اسم مسؤول الكاش';
 
       setColM1(m1);
       setColM2(m2);
       setColAcc(acc);
       setColRep(rep);
+      setColM3(m3);
+      setColCashAcc(cashAcc);
+      setColCashRep(cashRep);
 
-      executeReconciliation(sample1, sample2, m1, m2, acc, rep, 'لا يوجد مندوب');
+      executeReconciliation(sample1, sample2, sample3, m1, m2, acc, rep, m3, cashAcc, cashRep, 'لا يوجد مسؤول');
 
       setProgressState((p) => ({
         ...p,
@@ -572,8 +750,10 @@ export default function App() {
   const performResetAll = () => {
     setSheet1([]);
     setSheet2([]);
+    setSheet3([]);
     setSheet1FileName('');
     setSheet2FileName('');
+    setSheet3FileName('');
     setMachinesResults([]);
     setExpandedRows([]);
     setDuplicates([]);
@@ -594,6 +774,42 @@ export default function App() {
     }
     exportReconciliationToExcel(expandedRows);
     showToast('📥 تم تصدير ملف الإكسل المفصل بنجاح!');
+  };
+
+  // Automatically prepend "7-" to all machine numbers in Cash sheet (Sheet 3)
+  const handleApplyCashPrefix = () => {
+    if (!sheet3.length) {
+      showToast('⚠️ يرجى رفع شيت الكاش أولاً لتطبيق البادئة.');
+      return;
+    }
+
+    const mCol = colM3 || Object.keys(sheet3[0])[0];
+    if (!mCol) {
+      showToast('⚠️ تعذر تحديد عمود الماكينة لتطبيق البادئة.');
+      return;
+    }
+
+    const updated = sheet3.map((row) => {
+      const val = row[mCol];
+      if (val !== undefined && val !== null && val !== '') {
+        const str = String(val).trim();
+        if (!str.startsWith('7-')) {
+          return {
+            ...row,
+            [mCol]: `7-${str}`,
+          };
+        }
+      }
+      return row;
+    });
+
+    setSheet3(updated);
+    showToast(`✅ تم إضافة البادئة 7- لعدد ${updated.length.toLocaleString('ar-EG')} ماكينة كاش بنجاح!`);
+    
+    // Auto run reconciliation with updated data
+    if (sheet1.length > 0 && colM1) {
+      executeReconciliation(sheet1, sheet2, updated, colM1, colM2, colAcc, colRep, colM3 || mCol, colCashAcc, colCashRep, emptyRepFallback);
+    }
   };
 
   // Bulk actions handlers
@@ -628,7 +844,7 @@ export default function App() {
     });
 
     setSheet2(updatedSheet2);
-    executeReconciliation(sheet1, updatedSheet2, colM1, colM2, colAcc, colRep, emptyRepFallback);
+    executeReconciliation(sheet1, updatedSheet2, sheet3, colM1, colM2, colAcc, colRep, colM3, colCashAcc, colCashRep, emptyRepFallback);
     setSelectedMachines(new Set());
     showToast(`✅ تم إعادة توزيع ${selectedMachines.size} ماكينة للمندوب بنجاح!`);
   };
@@ -637,7 +853,7 @@ export default function App() {
     if (selectedMachines.size === 0) return;
     const updatedSheet2 = sheet2.filter((r) => !selectedMachines.has(String(r[colM2]).trim()));
     setSheet2(updatedSheet2);
-    executeReconciliation(sheet1, updatedSheet2, colM1, colM2, colAcc, colRep, emptyRepFallback);
+    executeReconciliation(sheet1, updatedSheet2, sheet3, colM1, colM2, colAcc, colRep, colM3, colCashAcc, colCashRep, emptyRepFallback);
     setSelectedMachines(new Set());
     showToast(`✅ تم تحويل ${selectedMachines.size} ماكينة إلى شاغرة (بدون مندوب).`);
   };
@@ -788,8 +1004,8 @@ export default function App() {
           setSheet1(data);
           setSheet1FileName('شيت_الماكينات_المعدل_يدوياً');
           showToast(`✅ تم اعتماد ${data.length} ماكينة من محرر القوالب.`);
-          if (sheet2.length > 0) {
-            executeReconciliation(data, sheet2, colM1 || 'رقم الماكينة', colM2 || 'رقم الماكينة', colAcc, colRep);
+          if (sheet2.length > 0 || sheet3.length > 0) {
+            executeReconciliation(data, sheet2, sheet3, colM1 || 'رقم الماكينة', colM2 || 'رقم الماكينة', colAcc, colRep, colM3 || 'رقم الماكينة', colCashAcc, colCashRep, emptyRepFallback);
           }
         }}
         onApplySheet2={(data) => {
@@ -797,7 +1013,7 @@ export default function App() {
           setSheet2FileName('شيت_المناديب_المعدل_يدوياً');
           showToast(`✅ تم اعتماد ${data.length} سجل مناديب من محرر القوالب.`);
           if (sheet1.length > 0) {
-            executeReconciliation(sheet1, data, colM1 || 'رقم الماكينة', colM2 || 'رقم الماكينة', colAcc, colRep);
+            executeReconciliation(sheet1, data, sheet3, colM1 || 'رقم الماكينة', colM2 || 'رقم الماكينة', colAcc, colRep, colM3 || 'رقم الماكينة', colCashAcc, colCashRep, emptyRepFallback);
           }
         }}
       />
@@ -817,10 +1033,14 @@ export default function App() {
         expandedRows={expandedRows}
         sheet1={sheet1}
         sheet2={sheet2}
+        sheet3={sheet3}
         colM1={colM1}
         colM2={colM2}
+        colM3={colM3}
         colAcc={colAcc}
         colRep={colRep}
+        colCashAcc={colCashAcc}
+        colCashRep={colCashRep}
         initialRepQuery={repLookupQuery}
         onLoadSample={handleLoadSample}
         onFilterMainTable={(query) => {
@@ -910,19 +1130,39 @@ export default function App() {
               </button>
             </div>
 
-            {/* 3. قالب المناديب (.xlsx) + CSV */}
+            {/* 3. قالب المدفوعات (.xlsx) + CSV */}
             <div className="inline-flex items-center bg-[#0d1527] border border-slate-700/80 rounded-xl p-1 text-xs font-bold text-white shrink-0">
               <button
                 onClick={() => downloadTemplateFile(2, 'xlsx')}
                 className="px-3 py-1.5 flex items-center gap-2 hover:text-emerald-300 transition-colors cursor-pointer"
-                title="تنزيل قالب شيت المناديب إكسل"
+                title="تنزيل قالب شيت المدفوعات إكسل"
               >
                 <FileSpreadsheet className="w-4 h-4 text-emerald-400" />
-                <span>قالب المناديب (.xlsx)</span>
+                <span>قالب المدفوعات (.xlsx)</span>
               </button>
               <div className="h-4 w-px bg-slate-700 mx-1"></div>
               <button
                 onClick={() => downloadTemplateFile(2, 'csv')}
+                className="px-2 py-1 text-[11px] font-black text-blue-400 hover:text-blue-300 transition-colors cursor-pointer"
+                title="تنزيل بصيغة CSV"
+              >
+                CSV
+              </button>
+            </div>
+
+            {/* 4. قالب الكاش (.xlsx) + CSV */}
+            <div className="inline-flex items-center bg-[#0d1527] border border-slate-700/80 rounded-xl p-1 text-xs font-bold text-white shrink-0">
+              <button
+                onClick={() => downloadTemplateFile(3, 'xlsx')}
+                className="px-3 py-1.5 flex items-center gap-2 hover:text-emerald-300 transition-colors cursor-pointer"
+                title="تنزيل قالب شيت الكاش إكسل"
+              >
+                <FileSpreadsheet className="w-4 h-4 text-emerald-400" />
+                <span>قالب الكاش (.xlsx)</span>
+              </button>
+              <div className="h-4 w-px bg-slate-700 mx-1"></div>
+              <button
+                onClick={() => downloadTemplateFile(3, 'csv')}
                 className="px-2 py-1 text-[11px] font-black text-blue-400 hover:text-blue-300 transition-colors cursor-pointer"
                 title="تنزيل بصيغة CSV"
               >
@@ -1036,22 +1276,21 @@ export default function App() {
                     initial={{ scale: 0.8, opacity: 0, y: -4 }}
                     animate={{ scale: 1, opacity: 1, y: 0 }}
                     exit={{ scale: 0.8, opacity: 0, y: 4 }}
-                    transition={{ type: 'spring', stiffness: 450, damping: 22 }}
                     className={`text-xs px-2.5 py-1 rounded-md transition-all duration-300 border font-medium ${
-                      sheet1.length > 0 && sheet2.length > 0
+                      sheet1.length > 0 && (sheet2.length > 0 || sheet3.length > 0)
                         ? 'bg-emerald-500/10 text-emerald-300 border-emerald-500/30 shadow-sm shadow-emerald-500/10'
                         : 'bg-slate-800 text-slate-300 border-slate-700'
                     }`}
                   >
-                    {2 - ((sheet1.length > 0 ? 1 : 0) + (sheet2.length > 0 ? 1 : 0)) === 0
-                      ? 'اكتمل رفع الملفين ✅'
-                      : `${2 - ((sheet1.length > 0 ? 1 : 0) + (sheet2.length > 0 ? 1 : 0))} ملفات متبقية`}
+                    {3 - ((sheet1.length > 0 ? 1 : 0) + (sheet2.length > 0 ? 1 : 0) + (sheet3.length > 0 ? 1 : 0)) === 0
+                      ? 'اكتمل رفع كافة الملفات ✅'
+                      : `${3 - ((sheet1.length > 0 ? 1 : 0) + (sheet2.length > 0 ? 1 : 0) + (sheet3.length > 0 ? 1 : 0))} ملفات متبقية`}
                   </motion.span>
                 </AnimatePresence>
               </div>
 
               {/* Upload Grid */}
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
                 
                 {/* Card 1 */}
                 <motion.div
@@ -1201,7 +1440,7 @@ export default function App() {
                             onClick={() => {
                               setSheet2([]);
                               setSheet2FileName('');
-                              showToast('🗑️ تم إفراغ شيت المناديب');
+                              showToast('🗑️ تم إفراغ شيت المدفوعات');
                             }}
                             className="text-[11px] font-medium text-rose-400 hover:text-rose-300 bg-rose-500/10 hover:bg-rose-500/20 px-1.5 py-0.5 rounded border border-rose-500/20 transition-all cursor-pointer"
                             title="إفراغ الملف"
@@ -1229,7 +1468,7 @@ export default function App() {
                   </div>
                   
                   <div>
-                    <h3 className="text-sm font-semibold text-slate-200 group-hover:text-white transition-colors">2. شيت المناديب والحسابات</h3>
+                    <h3 className="text-sm font-semibold text-slate-200 group-hover:text-white transition-colors">2. شيت المدفوعات</h3>
                     <motion.p
                       layout
                       className="text-xs text-slate-400 mt-1 truncate transition-colors group-hover:text-slate-300"
@@ -1263,6 +1502,121 @@ export default function App() {
                   </motion.label>
                 </motion.div>
 
+                {/* Card 3 */}
+                <motion.div
+                  layout
+                  transition={{ type: 'spring', stiffness: 350, damping: 26 }}
+                  whileHover={{ y: -4, transition: { type: 'spring', stiffness: 400, damping: 20 } }}
+                  whileTap={{ scale: 0.99 }}
+                  className={`border border-dashed rounded-xl p-4 flex flex-col justify-between gap-4 transition-all duration-300 shadow-sm hover:shadow-xl group relative overflow-hidden ${
+                    sheet3.length > 0
+                      ? 'border-emerald-500/60 bg-emerald-950/20 shadow-emerald-500/5'
+                      : 'border-slate-700 hover:border-amber-500/50 bg-slate-800/30'
+                  }`}
+                >
+                  <div className="flex items-start justify-between">
+                    <motion.div
+                      animate={{
+                        scale: sheet3.length > 0 ? [1, 1.22, 1] : 1,
+                        rotate: sheet3.length > 0 ? [0, -10, 10, 0] : 0,
+                      }}
+                      transition={{ type: 'spring', stiffness: 400, damping: 16 }}
+                      className={`p-2.5 rounded-lg transition-transform duration-300 group-hover:scale-110 group-hover:-rotate-3 ${
+                        sheet3.length > 0 ? 'bg-emerald-500/15 text-emerald-400' : 'bg-amber-500/10 text-amber-400'
+                      }`}
+                    >
+                      <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                    </motion.div>
+
+                    <AnimatePresence mode="wait">
+                      {sheet3.length > 0 ? (
+                        <motion.div
+                          key="sheet3-uploaded"
+                          initial={{ scale: 0.6, opacity: 0, y: -4 }}
+                          animate={{ scale: 1, opacity: 1, y: 0 }}
+                          exit={{ scale: 0.6, opacity: 0 }}
+                          transition={{ type: 'spring', stiffness: 480, damping: 20 }}
+                          className="flex items-center gap-1.5"
+                        >
+                          <motion.button
+                            whileHover={{ scale: 1.08 }}
+                            whileTap={{ scale: 0.92 }}
+                            transition={{ type: 'spring', stiffness: 500, damping: 25 }}
+                            onClick={handleApplyCashPrefix}
+                            className="text-[11px] font-medium text-emerald-400 hover:text-emerald-300 bg-emerald-500/10 hover:bg-emerald-500/20 px-1.5 py-0.5 rounded border border-emerald-500/20 transition-all cursor-pointer"
+                            title="إضافة 7- للماكينات"
+                          >
+                            ⚡ 7-
+                          </motion.button>
+                          <motion.button
+                            whileHover={{ scale: 1.08 }}
+                            whileTap={{ scale: 0.92 }}
+                            transition={{ type: 'spring', stiffness: 500, damping: 25 }}
+                            onClick={() => {
+                              setSheet3([]);
+                              setSheet3FileName('');
+                              showToast('🗑️ تم إفراغ شيت الكاش');
+                            }}
+                            className="text-[11px] font-medium text-rose-400 hover:text-rose-300 bg-rose-500/10 hover:bg-rose-500/20 px-1.5 py-0.5 rounded border border-rose-500/20 transition-all cursor-pointer"
+                            title="إفراغ الملف"
+                          >
+                            🗑️ إفراغ
+                          </motion.button>
+                          <span className="text-[11px] font-medium text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded border border-emerald-500/20 shadow-sm flex items-center gap-1">
+                            <span>{sheet3.length.toLocaleString('ar-EG')} سجل</span>
+                            <span className="text-emerald-300 font-bold">✓</span>
+                          </span>
+                        </motion.div>
+                      ) : (
+                        <motion.span
+                          key="sheet3-empty"
+                          initial={{ scale: 0.8, opacity: 0 }}
+                          animate={{ scale: 1, opacity: 1 }}
+                          exit={{ scale: 0.8, opacity: 0 }}
+                          transition={{ type: 'spring', stiffness: 450, damping: 22 }}
+                          className="text-[11px] font-medium text-rose-400 bg-rose-500/10 px-2 py-0.5 rounded border border-rose-500/20"
+                        >
+                          غير مرفوع
+                        </motion.span>
+                      )}
+                    </AnimatePresence>
+                  </div>
+                  
+                  <div>
+                    <h3 className="text-sm font-semibold text-slate-200 group-hover:text-white transition-colors">3. شيت الكاش</h3>
+                    <motion.p
+                      layout
+                      className="text-xs text-slate-400 mt-1 truncate transition-colors group-hover:text-slate-300"
+                      title={sheet3FileName || 'اضغط هنا لرفع الملف (Excel/CSV)'}
+                    >
+                      {sheet3FileName || 'اضغط هنا لرفع الملف (Excel/CSV)'}
+                    </motion.p>
+                  </div>
+
+                  <motion.label
+                    whileHover={{ scale: 1.02 }}
+                    whileTap={{ scale: 0.96 }}
+                    transition={{ type: 'spring', stiffness: 450, damping: 25 }}
+                    className={`w-full py-2 text-xs font-medium rounded-lg border transition-all duration-200 text-center cursor-pointer block ${
+                      sheet3.length > 0
+                        ? 'bg-emerald-950/40 hover:bg-emerald-900/60 text-emerald-200 border-emerald-700/60 shadow-sm'
+                        : 'bg-slate-800 hover:bg-slate-700 text-slate-200 border-slate-700'
+                    }`}
+                  >
+                    <span>{sheet3.length > 0 ? '🔄 تغيير الملف' : '☁️ رفع الملف'}</span>
+                    <input
+                      type="file"
+                      accept=".xlsx, .xls, .csv"
+                      className="hidden"
+                      onChange={(e) => {
+                        if (e.target.files?.length) {
+                          handleSheet3Upload(e.target.files[0]);
+                        }
+                      }}
+                    />
+                  </motion.label>
+                </motion.div>
+
               </div>
 
               {/* Bottom Action */}
@@ -1282,12 +1636,12 @@ export default function App() {
                   </button>
                 </div>
                 <motion.button
-                  whileHover={{ scale: (sheet1.length > 0 && sheet2.length > 0) ? 1.04 : 1.01 }}
+                  whileHover={{ scale: (sheet1.length > 0 && (sheet2.length > 0 || sheet3.length > 0)) ? 1.04 : 1.01 }}
                   whileTap={{ scale: 0.95 }}
                   transition={{ type: 'spring', stiffness: 450, damping: 22 }}
                   onClick={runReconciliation}
                   className={`px-5 py-2.5 rounded-xl text-xs font-bold text-white transition-all duration-200 flex items-center gap-2 cursor-pointer ${
-                    sheet1.length > 0 && sheet2.length > 0
+                    sheet1.length > 0 && (sheet2.length > 0 || sheet3.length > 0)
                       ? 'bg-blue-600 hover:bg-blue-500 shadow-lg shadow-blue-500/30 animate-ready-btn'
                       : 'bg-blue-600/70 hover:bg-blue-600 shadow-md shadow-blue-500/10'
                   }`}
@@ -1302,7 +1656,7 @@ export default function App() {
         </div>
 
         {/* Navigation Tabs - Modern Cards Grid */}
-        <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-6 gap-2.5 sm:gap-3">
+        <div className="grid grid-cols-2 sm:grid-cols-4 xl:grid-cols-7 gap-2.5 sm:gap-3">
           {/* Card 1: Sheet 1 */}
           <button
             onClick={() => setCurrentTab(1)}
@@ -1391,7 +1745,7 @@ export default function App() {
                   currentTab === 2 ? 'text-white' : 'text-slate-900 dark:text-white'
                 }`}
               >
-                2. شيت المناديب
+                2. شيت المدفوعات
               </h4>
               <p
                 className={`text-[10px] mt-1 font-medium truncate ${
@@ -1407,7 +1761,7 @@ export default function App() {
             )}
           </button>
 
-          {/* Card 3: Mapping */}
+          {/* Card 3: Sheet 3 */}
           <button
             onClick={() => setCurrentTab(3)}
             className={`p-3 sm:p-3.5 rounded-2xl border text-right transition-all duration-200 flex flex-col justify-between gap-2.5 cursor-pointer group relative overflow-hidden ${
@@ -1433,7 +1787,7 @@ export default function App() {
                     : 'bg-amber-500/10 text-amber-500 dark:text-amber-400 group-hover:bg-amber-500/20'
                 }`}
               >
-                <Sliders className="w-4 h-4" />
+                <Calculator className="w-4 h-4" />
               </div>
             </div>
 
@@ -1443,14 +1797,14 @@ export default function App() {
                   currentTab === 3 ? 'text-white' : 'text-slate-900 dark:text-white'
                 }`}
               >
-                3. تعيين الأعمدة
+                3. شيت الكاش
               </h4>
               <p
                 className={`text-[10px] mt-1 font-medium truncate ${
                   currentTab === 3 ? 'text-indigo-100 font-bold' : 'text-slate-500 dark:text-slate-400'
                 }`}
               >
-                {colM1 && colM2 ? 'أعمدة الربط محددة' : 'ضبط ومطابقة الأعمدة'}
+                {sheet3.length > 0 ? `${sheet3.length.toLocaleString('ar-EG')} سجل كاش` : 'ربط حسابات الكاش'}
               </p>
             </div>
 
@@ -1459,7 +1813,7 @@ export default function App() {
             )}
           </button>
 
-          {/* Card 4: Reports */}
+          {/* Card 4: Mapping */}
           <button
             onClick={() => setCurrentTab(4)}
             className={`p-3 sm:p-3.5 rounded-2xl border text-right transition-all duration-200 flex flex-col justify-between gap-2.5 cursor-pointer group relative overflow-hidden ${
@@ -1482,10 +1836,10 @@ export default function App() {
                 className={`w-7 h-7 rounded-xl flex items-center justify-center transition-colors ${
                   currentTab === 4
                     ? 'bg-white/20 text-white'
-                    : 'bg-indigo-500/10 text-indigo-500 dark:text-indigo-400 group-hover:bg-indigo-500/20'
+                    : 'bg-amber-500/10 text-amber-500 dark:text-amber-400 group-hover:bg-amber-500/20'
                 }`}
               >
-                <Layers className="w-4 h-4" />
+                <Sliders className="w-4 h-4" />
               </div>
             </div>
 
@@ -1495,14 +1849,14 @@ export default function App() {
                   currentTab === 4 ? 'text-white' : 'text-slate-900 dark:text-white'
                 }`}
               >
-                4. تقرير الأسطر
+                4. تعيين الأعمدة
               </h4>
               <p
-                className={`text-[10px] mt-1 font-mono font-bold truncate ${
-                  currentTab === 4 ? 'text-indigo-100' : 'text-indigo-600 dark:text-indigo-400'
+                className={`text-[10px] mt-1 font-medium truncate ${
+                  currentTab === 4 ? 'text-indigo-100 font-bold' : 'text-slate-500 dark:text-slate-400'
                 }`}
               >
-                {expandedRows.length.toLocaleString('ar-EG')} سطر مفصل
+                {colM1 && colM2 ? 'أعمدة الربط محددة' : 'ضبط ومطابقة الأعمدة'}
               </p>
             </div>
 
@@ -1511,13 +1865,13 @@ export default function App() {
             )}
           </button>
 
-          {/* Card 5: Audit & Conflicts */}
+          {/* Card 5: Reports */}
           <button
             onClick={() => setCurrentTab(5)}
             className={`p-3 sm:p-3.5 rounded-2xl border text-right transition-all duration-200 flex flex-col justify-between gap-2.5 cursor-pointer group relative overflow-hidden ${
               currentTab === 5
-                ? 'bg-amber-600 border-amber-400 text-white shadow-lg shadow-amber-600/30 ring-2 ring-amber-400/40'
-                : 'bg-white dark:bg-[#0a0f1d] border-slate-200 dark:border-slate-800 text-slate-700 dark:text-slate-300 hover:border-amber-400/60 hover:bg-slate-50 dark:hover:bg-[#0e1628]'
+                ? 'bg-indigo-600 border-indigo-400 text-white shadow-lg shadow-indigo-600/30 ring-2 ring-indigo-400/40'
+                : 'bg-white dark:bg-[#0a0f1d] border-slate-200 dark:border-slate-800 text-slate-700 dark:text-slate-300 hover:border-indigo-400/60 hover:bg-slate-50 dark:hover:bg-[#0e1628]'
             }`}
           >
             <div className="flex items-center justify-between w-full">
@@ -1534,29 +1888,27 @@ export default function App() {
                 className={`w-7 h-7 rounded-xl flex items-center justify-center transition-colors ${
                   currentTab === 5
                     ? 'bg-white/20 text-white'
-                    : 'bg-amber-500/10 text-amber-500 dark:text-amber-400 group-hover:bg-amber-500/20'
+                    : 'bg-indigo-500/10 text-indigo-500 dark:text-indigo-400 group-hover:bg-indigo-500/20'
                 }`}
               >
-                <CircleAlert className="w-4 h-4" />
+                <Layers className="w-4 h-4" />
               </div>
             </div>
 
             <div>
               <h4
                 className={`text-xs font-bold leading-tight ${
-                  currentTab === 5 ? 'text-white' : 'text-amber-600 dark:text-amber-400'
+                  currentTab === 5 ? 'text-white' : 'text-slate-900 dark:text-white'
                 }`}
               >
-                5. فحص النزاعات
+                5. تقرير الأسطر
               </h4>
               <p
                 className={`text-[10px] mt-1 font-mono font-bold truncate ${
-                  currentTab === 5 ? 'text-amber-100' : 'text-slate-500 dark:text-slate-400'
+                  currentTab === 5 ? 'text-indigo-100' : 'text-indigo-600 dark:text-indigo-400'
                 }`}
               >
-                {duplicates.length + irregulars.length > 0
-                  ? `${(duplicates.length + irregulars.length).toLocaleString('ar-EG')} شاذ / مكرر`
-                  : 'فحص سليم (0)'}
+                {expandedRows.length.toLocaleString('ar-EG')} سطر مفصل
               </p>
             </div>
 
@@ -1565,13 +1917,13 @@ export default function App() {
             )}
           </button>
 
-          {/* Card 6: Desktop App Studio */}
+          {/* Card 6: Audit & Conflicts */}
           <button
             onClick={() => setCurrentTab(6)}
             className={`p-3 sm:p-3.5 rounded-2xl border text-right transition-all duration-200 flex flex-col justify-between gap-2.5 cursor-pointer group relative overflow-hidden ${
               currentTab === 6
-                ? 'bg-blue-600 border-blue-400 text-white shadow-lg shadow-blue-600/30 ring-2 ring-blue-400/40'
-                : 'bg-white dark:bg-[#0a0f1d] border-slate-200 dark:border-slate-800 text-slate-700 dark:text-slate-300 hover:border-blue-400/60 hover:bg-slate-50 dark:hover:bg-[#0e1628]'
+                ? 'bg-amber-600 border-amber-400 text-white shadow-lg shadow-amber-600/30 ring-2 ring-amber-400/40'
+                : 'bg-white dark:bg-[#0a0f1d] border-slate-200 dark:border-slate-800 text-slate-700 dark:text-slate-300 hover:border-amber-400/60 hover:bg-slate-50 dark:hover:bg-[#0e1628]'
             }`}
           >
             <div className="flex items-center justify-between w-full">
@@ -1588,6 +1940,60 @@ export default function App() {
                 className={`w-7 h-7 rounded-xl flex items-center justify-center transition-colors ${
                   currentTab === 6
                     ? 'bg-white/20 text-white'
+                    : 'bg-amber-500/10 text-amber-500 dark:text-amber-400 group-hover:bg-amber-500/20'
+                }`}
+              >
+                <CircleAlert className="w-4 h-4" />
+              </div>
+            </div>
+
+            <div>
+              <h4
+                className={`text-xs font-bold leading-tight ${
+                  currentTab === 6 ? 'text-white' : 'text-amber-600 dark:text-amber-400'
+                }`}
+              >
+                6. فحص النزاعات
+              </h4>
+              <p
+                className={`text-[10px] mt-1 font-mono font-bold truncate ${
+                  currentTab === 6 ? 'text-amber-100' : 'text-slate-500 dark:text-slate-400'
+                }`}
+              >
+                {duplicates.length + irregulars.length > 0
+                  ? `${(duplicates.length + irregulars.length).toLocaleString('ar-EG')} شاذ / مكرر`
+                  : 'فحص سليم (0)'}
+              </p>
+            </div>
+
+            {currentTab === 6 && (
+              <div className="absolute bottom-0 left-0 right-0 h-1 bg-white/70 rounded-full mx-3 mb-0.5" />
+            )}
+          </button>
+
+          {/* Card 7: Desktop App Studio */}
+          <button
+            onClick={() => setCurrentTab(7)}
+            className={`p-3 sm:p-3.5 rounded-2xl border text-right transition-all duration-200 flex flex-col justify-between gap-2.5 cursor-pointer group relative overflow-hidden ${
+              currentTab === 7
+                ? 'bg-blue-600 border-blue-400 text-white shadow-lg shadow-blue-600/30 ring-2 ring-blue-400/40'
+                : 'bg-white dark:bg-[#0a0f1d] border-slate-200 dark:border-slate-800 text-slate-700 dark:text-slate-300 hover:border-blue-400/60 hover:bg-slate-50 dark:hover:bg-[#0e1628]'
+            }`}
+          >
+            <div className="flex items-center justify-between w-full">
+              <span
+                className={`text-[10px] font-mono font-black px-2 py-0.5 rounded-md ${
+                  currentTab === 7
+                    ? 'bg-white/20 text-white'
+                    : 'bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-400'
+                }`}
+              >
+                07
+              </span>
+              <div
+                className={`w-7 h-7 rounded-xl flex items-center justify-center transition-colors ${
+                  currentTab === 7
+                    ? 'bg-white/20 text-white'
                     : 'bg-blue-500/10 text-blue-500 dark:text-blue-400 group-hover:bg-blue-500/20'
                 }`}
               >
@@ -1599,23 +2005,23 @@ export default function App() {
               <div className="flex items-center justify-between gap-1">
                 <h4
                   className={`text-xs font-bold leading-tight ${
-                    currentTab === 6 ? 'text-white' : 'text-slate-900 dark:text-white'
+                    currentTab === 7 ? 'text-white' : 'text-slate-900 dark:text-white'
                   }`}
                 >
-                  6. استوديو HTML
+                  7. استوديو HTML
                 </h4>
                 <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse shrink-0" title="Live Update" />
               </div>
               <p
                 className={`text-[10px] mt-1 font-medium truncate ${
-                  currentTab === 6 ? 'text-blue-100 font-bold' : 'text-slate-500 dark:text-slate-400'
+                  currentTab === 7 ? 'text-blue-100 font-bold' : 'text-slate-500 dark:text-slate-400'
                 }`}
               >
                 تحديث أوفلاين
               </p>
             </div>
 
-            {currentTab === 6 && (
+            {currentTab === 7 && (
               <div className="absolute bottom-0 left-0 right-0 h-1 bg-white/70 rounded-full mx-3 mb-0.5" />
             )}
           </button>
@@ -1701,10 +2107,10 @@ export default function App() {
                 <div>
                   <h3 className="text-sm font-bold text-slate-900 dark:text-white mb-1 flex items-center gap-2">
                     <Users className="w-4 h-4 text-blue-500" />
-                    <span>رفع الشيت الثاني (شيت المناديب وأرقام حساباتهم وربط الماكينات)</span>
+                    <span>رفع الشيت الثاني (شيت مدفوعات المناديب وأرقام حساباتهم)</span>
                   </h3>
                   <p className="text-xs text-slate-500 dark:text-slate-400">
-                    الملف الذي يحتوي على رقم الماكينة، اسم المندوب، ورقم حساب المندوب (Account No / Code).
+                    الملف الذي يحتوي على رقم الماكينة، اسم المندوب، ورقم حساب المندوب للمدفوعات (Account No / Code).
                   </p>
                 </div>
 
@@ -1743,20 +2149,104 @@ export default function App() {
                 />
                 <FileSpreadsheet className="w-12 h-12 text-blue-500 mx-auto mb-2" />
                 <p className="text-xs font-bold text-slate-800 dark:text-slate-200 mb-1">
-                  اضغط هنا لاختيار شيت المناديب والحسابات أو اسحبه وأفلته هنا
+                  اضغط هنا لاختيار شيت المدفوعات أو اسحبه وأفلته هنا
                 </p>
                 <p className="text-[11px] text-slate-400">يدعم ملفات Excel (.xlsx, .xls) أو CSV</p>
               </label>
 
               {sheet2.length > 0 && (
                 <div className="mt-4 p-3 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-600 dark:text-emerald-400 text-xs font-bold flex items-center justify-between">
-                  <span>تم قراءة شيت المناديب والحسابات: {sheet2.length} سجل توزيع</span>
+                  <span>تم قراءة شيت المدفوعات بنجاح: {sheet2.length} سجل توزيع</span>
                   <button
                     onClick={() => setCurrentTab(3)}
                     className="text-indigo-600 dark:text-indigo-400 underline font-bold cursor-pointer"
                   >
-                    الانتقال لضبط الأعمدة &larr;
+                    الانتقال لرفع شيت الكاش &larr;
                   </button>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* TAB 3: Sheet 3 Upload (Cash) */}
+        {currentTab === 3 && (
+          <div className="space-y-4">
+            <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-3xl p-6 sm:p-8">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-4">
+                <div>
+                  <h3 className="text-sm font-bold text-slate-900 dark:text-white mb-1 flex items-center gap-2">
+                    <Calculator className="w-4 h-4 text-emerald-500" />
+                    <span>رفع الشيت الثالث (شيت الكاش وحسابات المناديب)</span>
+                  </h3>
+                  <p className="text-xs text-slate-500 dark:text-slate-400">
+                    الملف الذي يحتوي على رقم الماكينة، اسم المندوب المسؤول عن الكاش، ورقم حساب الكاش (Account No / Code).
+                  </p>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => downloadTemplateFile(3, 'xlsx')}
+                    className="px-3 py-1.5 text-xs font-bold rounded-xl bg-emerald-50 hover:bg-emerald-100 dark:bg-emerald-950/60 text-emerald-600 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800 flex items-center gap-1.5 transition-colors cursor-pointer"
+                  >
+                    <Download className="w-3.5 h-3.5" />
+                    <span>تحميل نموذج القالب</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Dropzone */}
+              <label className="relative border-2 border-dashed border-slate-300 dark:border-slate-700 rounded-3xl p-8 text-center cursor-pointer hover:border-emerald-500 bg-slate-50 dark:bg-slate-800/30 block transition-colors">
+                <input
+                  type="file"
+                  accept=".xlsx, .xls, .csv"
+                  className="hidden"
+                  onChange={(e) => {
+                    if (e.target.files?.length) {
+                      handleSheet3Upload(e.target.files[0]);
+                    }
+                  }}
+                />
+                <FileSpreadsheet className="w-12 h-12 text-emerald-500 mx-auto mb-2" />
+                <p className="text-xs font-bold text-slate-800 dark:text-slate-200 mb-1">
+                  اضغط هنا لاختيار شيت الكاش أو اسحبه وأفلته هنا
+                </p>
+                <p className="text-[11px] text-slate-400">يدعم ملفات Excel (.xlsx, .xls) أو CSV</p>
+              </label>
+
+              {sheet3.length > 0 && (
+                <div className="mt-6 p-4 rounded-2xl bg-[#080d16]/60 border border-slate-850 space-y-4">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-emerald-500/10 border border-emerald-500/20 p-3.5 rounded-xl text-emerald-600 dark:text-emerald-400 text-xs font-bold">
+                    <span>تم قراءة شيت الكاش بنجاح: {sheet3.length.toLocaleString('ar-EG')} سجل كاش</span>
+                    <button
+                      onClick={() => setCurrentTab(4)}
+                      className="text-indigo-600 dark:text-indigo-400 hover:text-indigo-500 underline font-bold cursor-pointer transition"
+                    >
+                      الانتقال لتعيين الأعمدة &larr;
+                    </button>
+                  </div>
+
+                  {/* Smart Helper Card */}
+                  <div className="p-4 rounded-xl bg-slate-800/20 border border-slate-800 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                    <div className="space-y-1">
+                      <h4 className="text-xs font-bold text-slate-200 flex items-center gap-1.5">
+                        <span>💡 منسق أرقام ماكينات الكاش السريع</span>
+                      </h4>
+                      <p className="text-[11px] text-slate-400">
+                        إذا كانت أرقام الماكينات في شيت الكاش المرفوع تبدأ بأرقام عادية (مثل <strong className="text-amber-400">123</strong>) وتريد تحويلها فوراً للتنسيق المطلوب المعتمد المقترن ببادئة الكاش (لتصبح <strong className="text-emerald-400">7-123</strong>) بضغطة زر واحدة:
+                      </p>
+                    </div>
+
+                    <motion.button
+                      whileHover={{ scale: 1.03 }}
+                      whileTap={{ scale: 0.97 }}
+                      transition={{ type: 'spring', stiffness: 450, damping: 22 }}
+                      onClick={handleApplyCashPrefix}
+                      className="px-4 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-black shadow-md shadow-emerald-500/10 hover:shadow-emerald-500/20 transition-all cursor-pointer flex items-center gap-1.5 shrink-0"
+                    >
+                      <span>⚡ إضافة البادئة (7-) تلقائياً</span>
+                    </motion.button>
+                  </div>
                 </div>
               )}
             </div>
@@ -1765,8 +2255,8 @@ export default function App() {
 
 
 
-        {/* TAB 3: Column Mapping */}
-        {currentTab === 3 && (
+        {/* TAB 4: Column Mapping */}
+        {currentTab === 4 && (
           <div className="space-y-4">
             <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-3xl p-6 sm:p-8">
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-4">
@@ -1782,7 +2272,8 @@ export default function App() {
               </div>
 
               {/* Selectors Grid */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+              <h4 className="text-xs font-bold text-[#4f46e5] dark:text-[#818cf8] mb-2">تعيين أعمدة المدفوعات والماكينات (شيت 1 وشيت 2)</h4>
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
                 {/* Machine Col 1 */}
                 <div className="p-4 rounded-2xl bg-slate-50 dark:bg-slate-800/40 border border-slate-200 dark:border-slate-800 space-y-2">
                   <label className="block text-xs font-bold text-indigo-600 dark:text-indigo-400">
@@ -1809,7 +2300,7 @@ export default function App() {
                 {/* Machine Col 2 */}
                 <div className="p-4 rounded-2xl bg-slate-50 dark:bg-slate-800/40 border border-slate-200 dark:border-slate-800 space-y-2">
                   <label className="block text-xs font-bold text-blue-600 dark:text-blue-400">
-                    2. عمود الماكينة (شيت المناديب):
+                    2. عمود الماكينة (شيت المدفوعات):
                   </label>
                   <select
                     className="w-full p-2 bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-xl text-xs font-semibold focus:border-blue-500 focus:outline-none"
@@ -1823,16 +2314,16 @@ export default function App() {
                         </option>
                       ))
                     ) : (
-                      <option value="">-- يرجى رفع شيت المناديب أولاً --</option>
+                      <option value="">-- يرجى رفع شيت المدفوعات أولاً --</option>
                     )}
                   </select>
-                  <p className="text-[10px] text-slate-400">رقم الماكينة المقابل في شيت المناديب</p>
+                  <p className="text-[10px] text-slate-400">رقم الماكينة المقابل في شيت المدفوعات</p>
                 </div>
 
                 {/* Account Col */}
                 <div className="p-4 rounded-2xl bg-slate-50 dark:bg-slate-800/40 border border-slate-200 dark:border-slate-800 space-y-2">
                   <label className="block text-xs font-bold text-amber-600 dark:text-amber-400">
-                    3. عمود رقم حساب المندوب:
+                    3. عمود رقم حساب المدفوعات:
                   </label>
                   <select
                     className="w-full p-2 bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-xl text-xs font-semibold focus:border-amber-500 focus:outline-none"
@@ -1847,13 +2338,13 @@ export default function App() {
                         </option>
                       ))}
                   </select>
-                  <p className="text-[10px] text-slate-400">كود / حساب المندوب أو الوكيل</p>
+                  <p className="text-[10px] text-slate-400">كود / حساب مسؤول المدفوعات</p>
                 </div>
 
                 {/* Rep Name Col */}
                 <div className="p-4 rounded-2xl bg-slate-50 dark:bg-slate-800/40 border border-slate-200 dark:border-slate-800 space-y-2">
                   <label className="block text-xs font-bold text-emerald-600 dark:text-emerald-400">
-                    4. عمود اسم المندوب:
+                    4. عمود اسم مندوب المدفوعات:
                   </label>
                   <select
                     className="w-full p-2 bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-xl text-xs font-semibold focus:border-emerald-500 focus:outline-none"
@@ -1867,10 +2358,80 @@ export default function App() {
                         </option>
                       ))
                     ) : (
-                      <option value="">-- يرجى رفع شيت المناديب أولاً --</option>
+                      <option value="">-- يرجى رفع شيت المدفوعات أولاً --</option>
                     )}
                   </select>
-                  <p className="text-[10px] text-slate-400">عمود اسم المندوب الفعلي</p>
+                  <p className="text-[10px] text-slate-400">عمود اسم المندوب في شيت المدفوعات</p>
+                </div>
+              </div>
+
+              <h4 className="text-xs font-bold text-emerald-600 dark:text-emerald-400 mb-2">تعيين أعمدة الكاش (شيت 3)</h4>
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                {/* Machine Col 3 */}
+                <div className="p-4 rounded-2xl bg-slate-50 dark:bg-slate-800/40 border border-slate-200 dark:border-slate-800 space-y-2">
+                  <label className="block text-xs font-bold text-indigo-600 dark:text-indigo-400">
+                    5. عمود الماكينة (شيت الكاش):
+                  </label>
+                  <select
+                    className="w-full p-2 bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-xl text-xs font-semibold focus:border-indigo-500 focus:outline-none"
+                    value={colM3}
+                    onChange={(e) => setColM3(e.target.value)}
+                  >
+                    {sheet3.length > 0 ? (
+                      Object.keys(sheet3[0]).map((c) => (
+                        <option key={c} value={c}>
+                          {c}
+                        </option>
+                      ))
+                    ) : (
+                      <option value="">-- يرجى رفع شيت الكاش أولاً --</option>
+                    )}
+                  </select>
+                  <p className="text-[10px] text-slate-400">رقم الماكينة المقابل في شيت الكاش</p>
+                </div>
+
+                {/* Cash Account Col */}
+                <div className="p-4 rounded-2xl bg-slate-50 dark:bg-slate-800/40 border border-slate-200 dark:border-slate-800 space-y-2">
+                  <label className="block text-xs font-bold text-amber-600 dark:text-amber-400">
+                    6. عمود رقم حساب الكاش:
+                  </label>
+                  <select
+                    className="w-full p-2 bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-xl text-xs font-semibold focus:border-amber-500 focus:outline-none"
+                    value={colCashAcc}
+                    onChange={(e) => setColCashAcc(e.target.value)}
+                  >
+                    <option value="">-- بدون عمود حساب كاش --</option>
+                    {sheet3.length > 0 &&
+                      Object.keys(sheet3[0]).map((c) => (
+                        <option key={c} value={c}>
+                          {c}
+                        </option>
+                      ))}
+                  </select>
+                  <p className="text-[10px] text-slate-400">كود / حساب مسؤول الكاش</p>
+                </div>
+
+                {/* Cash Rep Name Col */}
+                <div className="p-4 rounded-2xl bg-slate-50 dark:bg-slate-800/40 border border-slate-200 dark:border-slate-800 space-y-2">
+                  <label className="block text-xs font-bold text-emerald-600 dark:text-emerald-400">
+                    7. عمود اسم مندوب الكاش:
+                  </label>
+                  <select
+                    className="w-full p-2 bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-xl text-xs font-semibold focus:border-emerald-500 focus:outline-none"
+                    value={colCashRep}
+                    onChange={(e) => setColCashRep(e.target.value)}
+                  >
+                    {sheet3.length > 0 ? (
+                      Object.keys(sheet3[0]).map((c) => (
+                        <option key={c} value={c}>
+                          {c}
+                        </option>
+                      ))
+                    ) : (
+                      <option value="">-- يرجى رفع شيت الكاش أولاً --</option>
+                    )}
+                  </select>
+                  <p className="text-[10px] text-slate-400">عمود اسم المندوب في شيت الكاش</p>
                 </div>
               </div>
 
@@ -1901,11 +2462,11 @@ export default function App() {
 
               <div className="mt-6 pt-4 border-t border-slate-100 dark:border-slate-800 flex justify-between items-center">
                 <button
-                  onClick={() => setCurrentTab(2)}
+                  onClick={() => setCurrentTab(3)}
                   className="text-xs font-bold text-slate-500 hover:text-slate-700 dark:hover:text-slate-300 flex items-center gap-1.5 cursor-pointer"
                 >
                   <ArrowRight className="w-4 h-4" />
-                  <span>الرجوع لشيت المناديب</span>
+                  <span>الرجوع لشيت الكاش</span>
                 </button>
                 <button
                   onClick={runReconciliation}
@@ -1919,8 +2480,8 @@ export default function App() {
           </div>
         )}
 
-        {/* TAB 4: Detailed Reconciliation Reports & Sequential Rows */}
-        {currentTab === 4 && (
+        {/* TAB 5: Detailed Reconciliation Reports & Sequential Rows */}
+        {currentTab === 5 && (
           <div className="space-y-5">
             {/* KPI Summary Cards */}
             <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
@@ -2249,21 +2810,32 @@ export default function App() {
                                       </span>
                                     </div>
                                   </div>
-                                  <span
-                                    className={`px-2 py-1 rounded-xl text-[10px] font-black border ${
-                                      item.status === 'single'
-                                        ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30'
+                                  <div className="flex flex-col items-end gap-1 shrink-0">
+                                    <span
+                                      className={`px-2 py-0.5 rounded-xl text-[10px] font-black border ${
+                                        item.status === 'single'
+                                          ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30'
+                                          : item.status === 'multi'
+                                          ? 'bg-amber-500/20 text-amber-400 border-amber-500/30'
+                                          : 'bg-rose-500/20 text-rose-400 border-rose-500/30'
+                                      }`}
+                                    >
+                                      {item.status === 'single'
+                                        ? 'مندوب واحد (1/1)'
                                         : item.status === 'multi'
-                                        ? 'bg-amber-500/20 text-amber-400 border-amber-500/30'
-                                        : 'bg-rose-500/20 text-rose-400 border-rose-500/30'
-                                    }`}
-                                  >
-                                    {item.status === 'single'
-                                      ? 'مندوب واحد (1/1)'
-                                      : item.status === 'multi'
-                                      ? `مشتركة (${item.repOrder}/${item.totalRepsForMachine})`
-                                      : 'شاغرة'}
-                                  </span>
+                                        ? `مشتركة (${item.repOrder}/${item.totalRepsForMachine})`
+                                        : 'شاغرة'}
+                                    </span>
+                                    <span
+                                      className={`px-2 py-0.5 rounded-xl text-[10px] font-black border ${
+                                        item.type === 'cash'
+                                          ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30'
+                                          : 'bg-blue-500/20 text-blue-400 border-blue-500/30'
+                                      }`}
+                                    >
+                                      {item.type === 'cash' ? '💵 كاش' : '💳 مدفوعات'}
+                                    </span>
+                                  </div>
                                 </div>
 
                                 {/* Rep Sub-Card Box */}
@@ -2357,6 +2929,7 @@ export default function App() {
                         </th>
                         <th className="p-3.5 w-14 text-center font-mono">م</th>
                         <th className="p-3.5 w-48">رقم الماكينة</th>
+                        <th className="p-3.5 w-32 text-center">نوع الحساب</th>
                         <th className="p-3.5 w-40">رقم حساب المندوب</th>
                         <th className="p-3.5">اسم المندوب المسند</th>
                         <th className="p-3.5 w-48 text-center">ترتيب المندوب للماكينة</th>
@@ -2366,7 +2939,7 @@ export default function App() {
                     <tbody className="divide-y divide-slate-800/80 text-slate-300">
                       {displayedSlice.length === 0 ? (
                         <tr>
-                          <td colSpan={7} className="p-8 text-center text-slate-400">
+                          <td colSpan={8} className="p-8 text-center text-slate-400">
                             لا توجد نتائج تطابق شرط البحث أو الفلتر. ارفع الشيتات أو اختر «عينة فورية».
                           </td>
                         </tr>
@@ -2374,7 +2947,7 @@ export default function App() {
                         <>
                           {tableVirtualState.topPadding > 0 && (
                             <tr style={{ border: 'none' }}>
-                              <td colSpan={7} style={{ height: tableVirtualState.topPadding, padding: 0, border: 'none' }} />
+                              <td colSpan={8} style={{ height: tableVirtualState.topPadding, padding: 0, border: 'none' }} />
                             </tr>
                           )}
                           {displayedSlice.slice(tableVirtualState.startIndex, tableVirtualState.endIndex).map((item, idx) => {
@@ -2417,7 +2990,20 @@ export default function App() {
                                   )}
                                 </td>
 
-                                {/* Account Column */}
+                                {/* Account Type Column */}
+                                 <td className="p-3.5 text-center font-bold">
+                                   {item.type === 'cash' ? (
+                                     <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-black bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+                                       💵 كاش
+                                     </span>
+                                   ) : (
+                                     <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-black bg-blue-500/10 text-blue-400 border border-blue-500/20">
+                                       💳 مدفوعات
+                                     </span>
+                                   )}
+                                 </td>
+
+                                 {/* Account Column */}
                                 <td className="p-3.5">
                                   {item.account === 'غير متوفر' ? (
                                     <span className="text-slate-500 font-mono text-xs">غير متوفر</span>
@@ -2506,7 +3092,7 @@ export default function App() {
                           })}
                           {tableVirtualState.bottomPadding > 0 && (
                             <tr style={{ border: 'none' }}>
-                              <td colSpan={7} style={{ height: tableVirtualState.bottomPadding, padding: 0, border: 'none' }} />
+                              <td colSpan={8} style={{ height: tableVirtualState.bottomPadding, padding: 0, border: 'none' }} />
                             </tr>
                           )}
                         </>
@@ -2555,8 +3141,8 @@ export default function App() {
           </div>
         )}
 
-        {/* TAB 5: Audit & Conflict Inspection */}
-        {currentTab === 5 && (
+        {/* TAB 6: Audit & Conflict Inspection */}
+        {currentTab === 6 && (
           <AuditConflictsTab
             duplicates={duplicates}
             irregulars={irregulars}
@@ -2564,7 +3150,7 @@ export default function App() {
               if (duplicates.length > 0) {
                 setSearchQuery(duplicates[0].machine);
                 setCurrentFilter('all');
-                setCurrentTab(4);
+                setCurrentTab(5);
                 showToast(`🔍 تم تصفية الماكينة المكررة: ${duplicates[0].machine}`);
               }
             }}
@@ -2572,15 +3158,15 @@ export default function App() {
               if (irregulars.length > 0) {
                 setSearchQuery(irregulars[0].account);
                 setCurrentFilter('all');
-                setCurrentTab(4);
+                setCurrentTab(5);
                 showToast(`🔍 تم تصفية الحساب الشاذ: ${irregulars[0].account}`);
               }
             }}
           />
         )}
 
-        {/* TAB 6: Standalone Desktop App & HTML Exporter */}
-        {currentTab === 6 && (
+        {/* TAB 7: Standalone Desktop App & HTML Exporter */}
+        {currentTab === 7 && (
           <DesktopAppTab
             sheet1={sheet1}
             sheet2={sheet2}

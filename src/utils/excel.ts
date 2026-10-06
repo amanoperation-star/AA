@@ -5,16 +5,13 @@ export async function parseExcelFile(file: File): Promise<SheetRow[]> {
   const buffer = await file.arrayBuffer();
   let workbook: XLSX.WorkBook | null = null;
 
-  // 1. Try reading with codepage 65001 (UTF-8)
   try {
     workbook = XLSX.read(new Uint8Array(buffer), { type: 'array', codepage: 65001 });
   } catch (err1) {
-    // 2. Try UTF-8 string decoding
     try {
       const text = new TextDecoder('utf-8').decode(buffer);
       workbook = XLSX.read(text, { type: 'string' });
     } catch (err2) {
-      // 3. Try windows-1256 for Arabic Windows exports
       try {
         const text1256 = new TextDecoder('windows-1256').decode(buffer);
         workbook = XLSX.read(text1256, { type: 'string' });
@@ -28,15 +25,11 @@ export async function parseExcelFile(file: File): Promise<SheetRow[]> {
     return [];
   }
 
-  // Helper to extract rows from any worksheet with smart header detection
   const extractRowsFromWorksheet = (worksheet: XLSX.WorkSheet): SheetRow[] => {
     if (!worksheet || !worksheet['!ref']) return [];
-
-    // Extract as array of rows (2D array)
     const aoa = XLSX.utils.sheet_to_json<any[]>(worksheet, { header: 1, defval: '', raw: false });
     if (!aoa || aoa.length === 0) return [];
 
-    // Find the actual header row (some files have title banners or empty rows in rows 0-4)
     let headerRowIdx = -1;
     for (let r = 0; r < Math.min(aoa.length, 12); r++) {
       const row = aoa[r];
@@ -89,7 +82,6 @@ export async function parseExcelFile(file: File): Promise<SheetRow[]> {
     return result;
   };
 
-  // Check all sheets in the workbook and pick the one with the most records
   let bestRows: SheetRow[] = [];
   for (const sheetName of workbook.SheetNames) {
     const ws = workbook.Sheets[sheetName];
@@ -99,7 +91,6 @@ export async function parseExcelFile(file: File): Promise<SheetRow[]> {
     }
   }
 
-  // Fallback: standard sheet_to_json if aoa extraction yielded nothing
   if (bestRows.length === 0) {
     for (const sheetName of workbook.SheetNames) {
       const ws = workbook.Sheets[sheetName];
@@ -126,7 +117,7 @@ export async function parseExcelFile(file: File): Promise<SheetRow[]> {
   return bestRows;
 }
 
-export function downloadTemplateFile(templateType: 1 | 2, format: 'xlsx' | 'csv' = 'xlsx') {
+export function downloadTemplateFile(templateType: 1 | 2 | 3, format: 'xlsx' | 'csv' = 'xlsx') {
   let filename = '';
   let headers: string[] = [];
   let sampleRows: (string | number)[][] = [];
@@ -138,21 +129,20 @@ export function downloadTemplateFile(templateType: 1 | 2, format: 'xlsx' | 'csv'
       ['POS-1001', 'فرع المعادي - القاهرة', 'ماكينة رئيسية'],
       ['POS-1002', 'فرع المهندسين - الجيزة', ''],
       ['POS-1003', 'فرع سموحة - الإسكندرية', ''],
-      ['POS-1004', 'فرع المشاية - المنصورة', ''],
-      ['POS-1005', 'فرع الجامعة - طنطا', ''],
-      ['POS-1006', 'فرع الجمهورية - أسيوط', ''],
     ];
-  } else {
-    filename = 'نموذج_شيت_ربط_المناديب_والحسابات';
-    headers = ['رقم الماكينة', 'رقم حساب المندوب', 'اسم المندوب', 'حالة المندوب'];
+  } else if (templateType === 2) {
+    filename = 'نموذج_شيت_المدفوعات';
+    headers = ['رقم الماكينة', 'رقم حساب المدفوعات', 'اسم مسؤول المدفوعات', 'حالة الحساب'];
     sampleRows = [
       ['POS-1001', '1234', 'أحمد محمود سالم', 'نشط'],
       ['POS-1001', '456', 'محمود حسن رضوان', 'نشط'],
-      ['POS-1002', '555', 'خالد عبد الرحمن', 'نشط'],
-      ['POS-1003', '789', 'طارق زياد العتيبي', 'نشط'],
-      ['POS-1003', '890', 'عمر فاروق الشامي', 'نشط'],
-      ['POS-1003', '999', 'إبراهيم حسني مراد', 'نشط'],
-      ['POS-1004', '777', 'سامح عبد الله كمال', 'نشط'],
+    ];
+  } else {
+    filename = 'نموذج_شيت_الكاش';
+    headers = ['رقم الماكينة', 'رقم حساب الكاش', 'اسم مسؤول الكاش', 'حالة الحساب'];
+    sampleRows = [
+      ['7-POS-1001', '1234', 'أحمد محمود سالم (كاش)', 'نشط'],
+      ['7-POS-1002', '555', 'خالد عبد الرحمن (كاش)', 'نشط'],
     ];
   }
 
@@ -178,48 +168,57 @@ export function downloadTemplateFile(templateType: 1 | 2, format: 'xlsx' | 'csv'
     URL.revokeObjectURL(link.href);
   } else {
     const wb = XLSX.utils.book_new();
-    const ws = XLSX.utils.aoa_to_sheet(fullAoa);
+    
     if (templateType === 1) {
-      ws['!cols'] = [{ wch: 22 }, { wch: 30 }, { wch: 25 }];
+      const ws1 = XLSX.utils.aoa_to_sheet([['رقم الماكينة', 'الفرع / المنطقة', 'ملاحظات'], ...sampleRows]);
+      ws1['!cols'] = [{ wch: 22 }, { wch: 30 }, { wch: 25 }];
+      XLSX.utils.book_append_sheet(wb, ws1, 'ماكينات المدفوعات');
+
+      const ws2 = XLSX.utils.aoa_to_sheet([['رقم الماكينة', 'الفرع / المنطقة', 'ملاحظات'], ...sampleRows]);
+      ws2['!cols'] = [{ wch: 22 }, { wch: 30 }, { wch: 25 }];
+      XLSX.utils.book_append_sheet(wb, ws2, 'ماكينات الكاش');
     } else {
-      ws['!cols'] = [{ wch: 22 }, { wch: 24 }, { wch: 32 }, { wch: 18 }];
+      const ws = XLSX.utils.aoa_to_sheet(fullAoa);
+      ws['!cols'] = templateType === 2 ? [{ wch: 22 }, { wch: 24 }, { wch: 32 }, { wch: 18 }] : [{ wch: 22 }, { wch: 24 }, { wch: 32 }, { wch: 18 }];
+      XLSX.utils.book_append_sheet(wb, ws, 'النموذج_المعتمد');
     }
-    XLSX.utils.book_append_sheet(wb, ws, 'النموذج_المعتمد');
     XLSX.writeFile(wb, `${filename}.xlsx`);
   }
 }
 
-export function exportReconciliationToExcel(rows: ExpandedRow[], fileName = 'تقرير_مطابقة_الماكينات_أسطر_منفصلة_لكل_مندوب.xlsx') {
+export function exportReconciliationToExcel(rows: ExpandedRow[], fileName = 'تقرير_مطابقة_الماكينات_مدفوعات_وكاش.xlsx') {
   const data: (string | number)[][] = [
     [
       'م',
       'رقم الماكينة',
-      'رقم حساب المندوب',
-      'اسم المندوب',
-      'ترتيب المندوب للماكينة',
-      'إجمالي مناديب الماكينة',
+      'نوع الشيت',
+      'رقم الحساب',
+      'اسم المسؤول / المندوب',
+      'ترتيب السجل',
+      'إجمالي السجلات',
       'حالة الماكينة',
     ],
   ];
 
   for (let i = 0; i < rows.length; i++) {
     const item = rows[i];
-    let st = 'شاغرة (بدون مندوب)';
-    if (item.status === 'single') st = 'مندوب فردي';
-    if (item.status === 'multi') st = `متعددة المناديب (${item.totalRepsForMachine} مناديب)`;
+    let st = 'شاغرة (بدون مسؤول)';
+    if (item.status === 'single') st = 'مطابقة فردية';
+    if (item.status === 'multi') st = `متعددة السجلات (${item.totalRepsForMachine})`;
 
     let orderLabel = 'غير مسند';
-    if (item.status === 'single') orderLabel = 'مندوب وحيد (1 من 1)';
+    if (item.status === 'single') orderLabel = 'وحيد (1 من 1)';
     if (item.status === 'multi') {
       orderLabel =
         item.repOrder === 1
-          ? `المندوب الأول (1 من ${item.totalRepsForMachine})`
-          : `مندوب إضافي (${item.repOrder} من ${item.totalRepsForMachine})`;
+          ? `الأول (1 من ${item.totalRepsForMachine})`
+          : `إضافي (${item.repOrder} من ${item.totalRepsForMachine})`;
     }
 
     data.push([
       i + 1,
       item.machine,
+      item.type === 'cash' ? '💵 كاش' : '💳 مدفوعات',
       item.account,
       item.repName,
       orderLabel,
@@ -233,14 +232,15 @@ export function exportReconciliationToExcel(rows: ExpandedRow[], fileName = 'ت�
 
   ws['!cols'] = [
     { wch: 6 },
-    { wch: 24 },
-    { wch: 24 },
-    { wch: 34 },
-    { wch: 28 },
     { wch: 22 },
-    { wch: 28 },
+    { wch: 18 },
+    { wch: 22 },
+    { wch: 32 },
+    { wch: 24 },
+    { wch: 18 },
+    { wch: 24 },
   ];
 
-  XLSX.utils.book_append_sheet(wb, ws, 'أسطر_الماكينات_والمناديب');
+  XLSX.utils.book_append_sheet(wb, ws, 'مدفوعات_وكاش_الماكينات');
   XLSX.writeFile(wb, fileName);
 }
