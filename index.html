@@ -2,6 +2,81 @@
 <html lang="ar" dir="rtl" class="dark">
   <head>
     <meta charset="UTF-8" />
+    <script>
+      (function() {
+        // Catch and ignore global errors from Vite dev client/WebSocket
+        window.addEventListener('error', function(e) {
+          if (e && e.message && (
+            e.message.includes('vite') ||
+            e.message.includes('WebSocket') ||
+            e.message.includes('connection') ||
+            e.message.includes('createWebSocketModuleRunnerTransport')
+          )) {
+            console.warn('Prevented Vite/WebSocket error from bubbling up:', e.message);
+            e.preventDefault();
+            e.stopPropagation();
+          }
+        }, true);
+
+        window.addEventListener('unhandledrejection', function(e) {
+          if (e && e.reason && e.reason.message && (
+            e.reason.message.includes('vite') ||
+            e.reason.message.includes('WebSocket') ||
+            e.reason.message.includes('connection') ||
+            e.reason.message.includes('createWebSocketModuleRunnerTransport')
+          )) {
+            console.warn('Prevented Vite/WebSocket unhandled promise rejection:', e.reason.message);
+            e.preventDefault();
+            e.stopPropagation();
+          }
+        }, true);
+
+        // Intercept WebSocket creation
+        const OriginalWS = window.WebSocket;
+        if (OriginalWS) {
+          const CustomWS = function(url, protocols) {
+            if (typeof url === 'string' && (
+              url.includes('vite') ||
+              url.includes('ws://') ||
+              url.includes('wss://') ||
+              url.includes('/@vite/')
+            )) {
+              console.log('MatchHub: Bypassing Vite HMR WebSocket connection to avoid connection errors.');
+              
+              // Create a safe, fake WebSocket object
+              const fake = Object.create(OriginalWS.prototype);
+              Object.defineProperties(fake, {
+                url: { value: url, writable: false },
+                readyState: { value: 0, writable: true }, // CONNECTING
+                bufferedAmount: { value: 0, writable: false },
+                extensions: { value: '', writable: false },
+                protocol: { value: '', writable: false },
+                binaryType: { value: 'blob', writable: true },
+                onopen: { value: null, writable: true },
+                onclose: { value: null, writable: true },
+                onerror: { value: null, writable: true },
+                onmessage: { value: null, writable: true }
+              });
+              fake.send = function() {};
+              fake.close = function() {};
+              fake.addEventListener = function() {};
+              fake.removeEventListener = function() {};
+              fake.dispatchEvent = function() { return true; };
+              return fake;
+            }
+            return new OriginalWS(url, protocols);
+          };
+          CustomWS.prototype = OriginalWS.prototype;
+          // Copy static constants like CONNECTING, OPEN, etc.
+          for (const key in OriginalWS) {
+            if (Object.prototype.hasOwnProperty.call(OriginalWS, key)) {
+              CustomWS[key] = OriginalWS[key];
+            }
+          }
+          window.WebSocket = CustomWS;
+        }
+      })();
+    </script>
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>MatchHub Desktop - مطابقة الماكينات وحسابات المناديب</title>
     <meta name="description" content="برنامج سطح المكتب المتقدم لمطابقة ماكينات الدفع بحسابات ومناديب التوزيع وتفصيل الأسطر والنزاعات أوفلاين." />

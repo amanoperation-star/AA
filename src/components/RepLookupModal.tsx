@@ -52,6 +52,55 @@ function normalizeText(text: string | number | undefined | null): string {
   return clean;
 }
 
+function sumFinancialColumns(rows: SheetRow[], keywords: string[]): number {
+  if (!rows || rows.length === 0) return 0;
+  
+  // Find all columns in the first row that match any of the keywords
+  const firstRow = rows[0];
+  const matchingCols = Object.keys(firstRow).filter(key => {
+    const normKey = key.toLowerCase();
+    return keywords.some(kw => normKey.includes(kw.toLowerCase()));
+  });
+
+  if (matchingCols.length === 0) {
+    // Fallback: search for any column that has purely numeric/decimal values except columns that look like IDs/Accounts
+    const numericCols = Object.keys(firstRow).filter(key => {
+      const normKey = key.toLowerCase();
+      // Exclude IDs, machine numbers, accounts, telephone numbers, order index etc.
+      if (/ماكينة|جهاز|pos|machine|sn|id|account|acc|code|تليفون|هاتف|رقم|موبايل|phone|mobile|date|تاريخ|index|serial|مسلسل|الترتيب/i.test(normKey)) {
+        return false;
+      }
+      // Check if values are mostly numeric
+      const val = firstRow[key];
+      if (val === undefined || val === null) return false;
+      const cleanVal = String(val).replace(/,/g, '').trim();
+      const num = parseFloat(cleanVal);
+      return !isNaN(num) && num > 0;
+    });
+    matchingCols.push(...numericCols);
+  }
+
+  // De-duplicate matching columns
+  const finalCols = Array.from(new Set(matchingCols));
+
+  let totalSum = 0;
+  rows.forEach(row => {
+    finalCols.forEach(col => {
+      const val = row[col];
+      if (val !== undefined && val !== null) {
+        // Remove commas and parse
+        const cleanVal = String(val).replace(/,/g, '').trim();
+        const num = parseFloat(cleanVal);
+        if (!isNaN(num)) {
+          totalSum += num;
+        }
+      }
+    });
+  });
+
+  return totalSum;
+}
+
 interface RepLookupModalProps {
   isOpen: boolean;
   onClose: () => void;
@@ -546,6 +595,58 @@ export const RepLookupModal: React.FC<RepLookupModalProps> = ({
     const soleCount = machinesList.filter((m) => m.totalRepsOnMachine === 1).length;
     const sharedCount = machinesList.filter((m) => m.totalRepsOnMachine > 1).length;
 
+    // Filter sheet2 and sheet3 rows to calculate exact financial sums
+    const matchedSheet2Rows = (sheet2 || []).filter(row => {
+      const sampleRow = row;
+      const keys = Object.keys(sampleRow);
+      
+      const accCol = colAcc && sampleRow[colAcc] !== undefined
+        ? colAcc
+        : keys.find((k) => /^(doner1|donor1|doner_1|donor_1|doner 1|donor 1|doner|donor|رقم حساب المدفوعات|حساب المدفوعات)$/i.test(k))
+          || keys.find((k) => /(doner.*1|donor.*1|^doner$|^donor$|حساب.*مدفوعات|رقم.*المدفوعات)/i.test(k))
+          || keys.find((k) => /حساب|كود|رقم.*مندوب|account|acc|code|doner|donor/i.test(k)) || '';
+
+      const repCol = colRep && sampleRow[colRep] !== undefined
+        ? colRep
+        : keys.find((k) => /اسم.*مندوب|اسم.*العميل|اسم.*المستخدم|اسم|rep.*name|agent.*name|name/i.test(k))
+          || accCol || keys[1] || keys[0];
+
+      const accVal = accCol && row[accCol] !== undefined ? String(row[accCol]).trim() : '';
+      const repName = row[repCol] !== undefined && row[repCol] !== null ? String(row[repCol]).trim() : '';
+
+      const accNorm = accVal.toLowerCase().replace(/[\u200B-\u200D\uFEFF\u00A0]/g, '').replace(/[٠-٩]/g, (d) => String('٠١٢٣٤٥٦٧٨٩'.indexOf(d)));
+      const nameNorm = repName.toLowerCase().replace(/[\u200B-\u200D\uFEFF\u00A0]/g, '').replace(/[٠-٩]/g, (d) => String('٠١٢٣٤٥٦٧٨٩'.indexOf(d)));
+
+      return accNorm.includes(qNorm) || nameNorm.includes(qNorm) || qNorm.includes(accNorm);
+    });
+
+    const matchedSheet3Rows = (sheet3 || []).filter(row => {
+      const sampleRow = row;
+      const keys = Object.keys(sampleRow);
+
+      const accCol3 = colCashAcc && sampleRow[colCashAcc] !== undefined
+        ? colCashAcc
+        : keys.find((k) => /^(doner2|donor2|doner_2|donor_2|doner 2|donor 2|رقم الكاش المدفوعات|رقم الكاش|حساب الكاش)$/i.test(k))
+          || keys.find((k) => /(doner.*2|donor.*2|كاش.*مدفوعات|رقم.*الكاش|حساب.*الكاش)/i.test(k))
+          || keys.find((k) => /حساب|كود|رقم.*مندوب|account|acc|code|doner|donor/i.test(k)) || '';
+
+      const repCol3 = colCashRep && sampleRow[colCashRep] !== undefined
+        ? colCashRep
+        : keys.find((k) => /اسم.*مندوب|اسم.*العميل|اسم.*المستخدم|اسم|rep.*name|agent.*name|name/i.test(k))
+          || accCol3 || keys[1] || keys[0];
+
+      const accVal = accCol3 && row[accCol3] !== undefined ? String(row[accCol3]).trim() : '';
+      const repName = row[repCol3] !== undefined && row[repCol3] !== null ? String(row[repCol3]).trim() : '';
+
+      const accNorm = accVal.toLowerCase().replace(/[\u200B-\u200D\uFEFF\u00A0]/g, '').replace(/[٠-٩]/g, (d) => String('٠١٢٣٤٥٦٧٨٩'.indexOf(d)));
+      const nameNorm = repName.toLowerCase().replace(/[\u200B-\u200D\uFEFF\u00A0]/g, '').replace(/[٠-٩]/g, (d) => String('٠١٢٣٤٥٦٧٨٩'.indexOf(d)));
+
+      return accNorm.includes(qNorm) || nameNorm.includes(qNorm) || qNorm.includes(accNorm);
+    });
+
+    const totalPaymentsAmount = sumFinancialColumns(matchedSheet2Rows, ['مبلغ', 'قيمة', 'القيمة', 'رصيد', 'صافي', 'الصافي', 'المدفوع', 'المدفوعات', 'القيمه', 'حركة', 'الحركات', 'amount', 'value', 'total', 'net', 'pay', 'sum', 'balance']);
+    const totalCashAmount = sumFinancialColumns(matchedSheet3Rows, ['مبلغ', 'قيمة', 'القيمة', 'رصيد', 'صافي', 'الصافي', 'الكاش', 'كاش', 'القيمه', 'حركة', 'الحركات', 'amount', 'value', 'total', 'net', 'cash', 'sum', 'balance']);
+
     return {
       repInfo: {
         account: primaryAccount,
@@ -555,10 +656,13 @@ export const RepLookupModal: React.FC<RepLookupModalProps> = ({
         paymentsCount,
         soleCount,
         sharedCount,
+        totalPaymentsAmount,
+        totalCashAmount,
+        totalOverallAmount: totalPaymentsAmount + totalCashAmount,
       },
       machines: machinesList,
     };
-  }, [searchQuery, activeTab, expandedRows, machinesResults, sheet2Index]);
+  }, [searchQuery, activeTab, expandedRows, machinesResults, sheet2Index, sheet2, sheet3, colAcc, colRep, colCashAcc, colCashRep]);
 
   // Machine Matched Data (الاستعلام عن ماكينة معينة)
   const matchedMachineData = useMemo(() => {
@@ -1015,6 +1119,53 @@ export const RepLookupModal: React.FC<RepLookupModalProps> = ({
                       </div>
                     </div>
                   </div>
+
+                  {/* Financial Statistics Row */}
+                  {(matchedRepData.repInfo.totalPaymentsAmount > 0 || matchedRepData.repInfo.totalCashAmount > 0) && (
+                    <div className="mt-4 pt-3.5 border-t border-slate-800/80 grid grid-cols-1 sm:grid-cols-3 gap-3 text-right">
+                      {/* Cash Sum Card */}
+                      <div className="p-3 rounded-xl bg-emerald-500/5 border border-emerald-500/20 flex items-center justify-between shadow-sm">
+                        <div className="flex items-center gap-2">
+                          <span className="text-lg">💵</span>
+                          <div className="text-right">
+                            <span className="text-[10px] text-emerald-400 font-bold block">إجمالي مبالغ الكاش</span>
+                            <span className="text-[10px] text-slate-400">من واقع شيت الكاش</span>
+                          </div>
+                        </div>
+                        <span className="text-sm sm:text-base font-mono font-black text-emerald-400">
+                          {matchedRepData.repInfo.totalCashAmount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                        </span>
+                      </div>
+
+                      {/* Payments Sum Card */}
+                      <div className="p-3 rounded-xl bg-blue-500/5 border border-blue-500/20 flex items-center justify-between shadow-sm">
+                        <div className="flex items-center gap-2">
+                          <span className="text-lg">💳</span>
+                          <div className="text-right">
+                            <span className="text-[10px] text-blue-400 font-bold block">إجمالي مبالغ المدفوعات</span>
+                            <span className="text-[10px] text-slate-400">من واقع شيت المدفوعات</span>
+                          </div>
+                        </div>
+                        <span className="text-sm sm:text-base font-mono font-black text-blue-400">
+                          {matchedRepData.repInfo.totalPaymentsAmount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                        </span>
+                      </div>
+
+                      {/* Combined Sum Card */}
+                      <div className="p-3 rounded-xl bg-indigo-500/10 border border-indigo-500/20 flex items-center justify-between shadow-sm">
+                        <div className="flex items-center gap-2">
+                          <span className="text-lg">💰</span>
+                          <div className="text-right">
+                            <span className="text-[10px] text-indigo-400 font-bold block">إجمالي المبالغ بالكامل</span>
+                            <span className="text-[10px] text-slate-400">كاش + مدفوعات مندوب</span>
+                          </div>
+                        </div>
+                        <span className="text-sm sm:text-base font-mono font-black text-white">
+                          {matchedRepData.repInfo.totalOverallAmount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                        </span>
+                      </div>
+                    </div>
+                  )}
                 </div>
 
                 {/* Machines Section for this Rep */}
