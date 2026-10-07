@@ -733,7 +733,15 @@ export const RepLookupModal: React.FC<RepLookupModalProps> = ({
       case 'duplicated':
         return list.filter((m) => m.isRepeatedForSameRep);
       case 'cash':
-        return list.filter((m) => m.cashCount > 0 || m.type === 'cash' || m.type === 'both' || m.machine.startsWith('7-') || m.machine.startsWith('٧-'));
+        return list.filter((m) => 
+          m.cashCount > 0 || 
+          m.type === 'cash' || 
+          m.type === 'both' || 
+          m.machine.startsWith('7-') || 
+          m.machine.startsWith('٧-') ||
+          (m.repeatDescription && m.repeatDescription.toLowerCase().includes('cash')) ||
+          (m.repeatDescription && m.repeatDescription.includes('كاش'))
+        );
       case 'payment':
         return list.filter((m) => m.paymentCount > 0 || m.type === 'payment' || m.type === 'both');
       case 'both':
@@ -753,7 +761,15 @@ export const RepLookupModal: React.FC<RepLookupModalProps> = ({
       case 'duplicated':
         return list.filter((o) => o.isRepeatedForSameRep);
       case 'cash':
-        return list.filter((o) => o.type === 'cash' || o.machine.startsWith('7-') || o.machine.startsWith('٧-'));
+        return list.filter((o) => 
+          o.type === 'cash' || 
+          o.sheetSource === 'cash' || 
+          o.machine.startsWith('7-') || 
+          o.machine.startsWith('٧-') ||
+          normalizeMachineId(o.machine).startsWith('7-') ||
+          (o.repeatDescription && o.repeatDescription.toLowerCase().includes('cash')) ||
+          (o.repeatDescription && o.repeatDescription.includes('كاش'))
+        );
       case 'payment':
         return list.filter((o) => o.type === 'payment');
       case 'both':
