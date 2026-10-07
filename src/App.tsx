@@ -26,14 +26,17 @@ import {
   FileCode,
   Calculator,
   Eye,
+  Split,
+  Info,
 } from 'lucide-react';
 import { SheetRow, ExpandedRow, MachineSummary, DuplicateAuditItem, IrregularAccountItem } from './types';
-import { parseExcelFile, downloadTemplateFile, exportReconciliationToExcel } from './utils/excel';
+import { parseExcelFile, downloadTemplateFile, exportReconciliationToExcel, exportReconciliationToCsv } from './utils/excel';
 import { DesktopHeader } from './components/DesktopHeader';
 import { DesktopAppCenterModal } from './components/DesktopAppCenterModal';
 import { ManualEditorModal } from './components/ManualEditorModal';
 import { ResetConfirmModal } from './components/ResetConfirmModal';
 import { RepLookupModal } from './components/RepLookupModal';
+import { BigFileSplitterModal } from './components/BigFileSplitterModal';
 import { AuditConflictsTab } from './components/AuditConflictsTab';
 import { BulkActionBar } from './components/BulkActionBar';
 import { ProgressModal } from './components/ProgressModal';
@@ -42,12 +45,18 @@ import { DesktopAppTab } from './components/DesktopAppTab';
 
 function normalizeMachineId(id: string | number | undefined | null): string {
   if (id === undefined || id === null) return '';
-  let clean = String(id).trim();
+  let clean = String(id).replace(/[\u200B-\u200D\uFEFF\u00A0]/g, '').trim();
+  // Convert Eastern Arabic digits (٠-٩) to Western digits (0-9)
+  clean = clean.replace(/[٠-٩]/g, (d) => String('٠١٢٣٤٥٦٧٨٩'.indexOf(d)));
   // Remove "7-" or "٧-" prefixes
   if (clean.startsWith('7-')) {
     clean = clean.substring(2).trim();
   } else if (clean.startsWith('٧-')) {
     clean = clean.substring(2).trim();
+  }
+  // Remove trailing .0 from float string representation (e.g. 1001.0 -> 1001)
+  if (clean.endsWith('.0')) {
+    clean = clean.substring(0, clean.length - 2);
   }
   return clean;
 }
@@ -70,6 +79,7 @@ export default function App() {
   const [isManualEditorOpen, setIsManualEditorOpen] = useState(false);
   const [isResetConfirmOpen, setIsResetConfirmOpen] = useState(false);
   const [isRepLookupOpen, setIsRepLookupOpen] = useState(false);
+  const [isSplitterOpen, setIsSplitterOpen] = useState(false);
   const [repLookupQuery, setRepLookupQuery] = useState('');
   const [editorInitialMode, setEditorInitialMode] = useState<1 | 2>(1);
 
@@ -123,7 +133,8 @@ export default function App() {
   const [accountTypeFilter, setAccountTypeFilter] = useState<'all' | 'cash' | 'payments'>('all');
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [currentPage, setCurrentPage] = useState<number>(1);
-  const [viewMode, setViewMode] = useState<'cards' | 'table'>('cards'); // Default to vibrant Cards & Boxes view
+  const [viewMode, setViewMode] = useState<'cards' | 'table' | 'split'>('cards'); // Default to vibrant Cards & Boxes view
+  const [splitSelectedMachine, setSplitSelectedMachine] = useState<string>('');
   const pageSize = 50;
   const searchInputRef = useRef<HTMLInputElement>(null);
 
@@ -217,14 +228,28 @@ export default function App() {
 
     if (sheet2.length > 0) {
       const cols2 = Object.keys(sheet2[0]);
-      const foundM2 = cols2.find((c) => /ماكينة|جهاز|pos|machine|sn/i.test(c)) || cols2[0];
-      const foundAcc = cols2.find((c) => /حساب|كود|رقم.*مندوب|account|acc|code/i.test(c)) || '';
+      const foundM2 =
+        cols2.find((c) => /^(acceptor1|acceptor_1|acceptor 1|acceptor|ماكينة المدفوعات|ماكينه المدفوعات)$/i.test(c)) ||
+        cols2.find((c) => /(acceptor.*1|^acceptor$|ماكين.*مدفوعات)/i.test(c)) ||
+        cols2.find((c) => /ماكينة|جهاز|pos|machine|sn|acceptor/i.test(c)) ||
+        cols2[0];
+
+      const foundAcc =
+        cols2.find((c) => /^(doner1|donor1|doner_1|donor_1|doner 1|donor 1|doner|donor|رقم حساب المدفوعات|حساب المدفوعات)$/i.test(c)) ||
+        cols2.find((c) => /(doner.*1|donor.*1|^doner$|^donor$|حساب.*مدفوعات|رقم.*المدفوعات)/i.test(c)) ||
+        cols2.find((c) => /حساب|كود|رقم.*مندوب|account|acc|code|doner|donor/i.test(c)) ||
+        '';
+
       let foundRep = cols2.find((c) => /اسم.*مندوب|اسم.*العميل|اسم.*المستخدم|اسم|rep.*name|agent.*name|name/i.test(c));
       if (!foundRep) {
         foundRep = cols2.find((c) => /(مندوب|agent|rep)/i.test(c) && !/(رقم|حساب|كود|acc|code|id)/i.test(c));
       }
       if (!foundRep) {
-        foundRep = cols2.find((c) => /(مندوب|agent|rep)/i.test(c)) || cols2[1] || cols2[0];
+        foundRep =
+          cols2.find((c) => /(doner.*1|donor.*1|doner1|donor1|^doner$|^donor$)/i.test(c)) ||
+          cols2.find((c) => /(مندوب|agent|rep|doner|donor)/i.test(c)) ||
+          cols2[1] ||
+          cols2[0];
       }
 
       setColM2(foundM2);
@@ -234,14 +259,30 @@ export default function App() {
 
     if (sheet3.length > 0) {
       const cols3 = Object.keys(sheet3[0]);
-      const foundM3 = cols3.find((c) => /ماكينة|جهاز|pos|machine|sn/i.test(c)) || cols3[0];
-      const foundCashAcc = cols3.find((c) => /حساب|كود|رقم.*مندوب|account|acc|code/i.test(c)) || '';
+      // Specifically prioritize acceptor2 (رقم ماكينه الكاش)
+      const foundM3 =
+        cols3.find((c) => /^(acceptor2|acceptor_2|acceptor 2|رقم ماكينه الكاش|ماكينه الكاش|ماكينة الكاش)$/i.test(c)) ||
+        cols3.find((c) => /(acceptor.*2|ماكين.*كاش|ماكينة.*الكاش)/i.test(c)) ||
+        cols3.find((c) => /ماكينة|جهاز|pos|machine|sn|acceptor/i.test(c)) ||
+        cols3[0];
+
+      // Specifically prioritize doner2 (رقم الكاش المدفوعات / رقم حساب الكاش)
+      const foundCashAcc =
+        cols3.find((c) => /^(doner2|donor2|doner_2|donor_2|doner 2|donor 2|رقم الكاش المدفوعات|رقم الكاش|حساب الكاش)$/i.test(c)) ||
+        cols3.find((c) => /(doner.*2|donor.*2|كاش.*مدفوعات|رقم.*الكاش|حساب.*الكاش)/i.test(c)) ||
+        cols3.find((c) => /حساب|كود|رقم.*مندوب|account|acc|code|doner|donor/i.test(c)) ||
+        '';
+
       let foundCashRep = cols3.find((c) => /اسم.*مندوب|اسم.*العميل|اسم.*المستخدم|اسم|rep.*name|agent.*name|name/i.test(c));
       if (!foundCashRep) {
         foundCashRep = cols3.find((c) => /(مندوب|agent|rep)/i.test(c) && !/(رقم|حساب|كود|acc|code|id)/i.test(c));
       }
       if (!foundCashRep) {
-        foundCashRep = cols3.find((c) => /(مندوب|agent|rep)/i.test(c)) || cols3[1] || cols3[0];
+        foundCashRep =
+          cols3.find((c) => /(doner.*2|donor.*2|doner2|donor2)/i.test(c)) ||
+          cols3.find((c) => /(مندوب|agent|rep|doner|donor)/i.test(c)) ||
+          cols3[1] ||
+          cols3[0];
       }
 
       setColM3(foundM3);
@@ -267,14 +308,64 @@ export default function App() {
     const repMap = new Map<string, Array<{ account: string; name: string; isMissingRepName: boolean; type: 'payment' | 'cash' }>>();
     const irregularsList: IrregularAccountItem[] = [];
 
+    // Resolve effective column names for Sheet 1, Sheet 2, Sheet 3
+    const s1Sample = s1[0] || {};
+    const effectiveM1 = m1Name && s1Sample[m1Name] !== undefined
+      ? m1Name
+      : Object.keys(s1Sample).find((k) => /ماكينة|جهاز|pos|machine|sn|id/i.test(k)) || Object.keys(s1Sample)[0] || '';
+
+    const s2Sample = s2[0] || {};
+    const s2Keys = Object.keys(s2Sample);
+    const effectiveM2 = m2Name && s2Sample[m2Name] !== undefined
+      ? m2Name
+      : s2Keys.find((k) => /^(acceptor1|acceptor_1|acceptor 1|acceptor|ماكينة المدفوعات|ماكينه المدفوعات)$/i.test(k))
+        || s2Keys.find((k) => /(acceptor.*1|^acceptor$|ماكين.*مدفوعات)/i.test(k))
+        || s2Keys.find((k) => /ماكينة|جهاز|pos|machine|sn|acceptor/i.test(k))
+        || s2Keys[0] || '';
+
+    const effectiveAcc = accName && s2Sample[accName] !== undefined
+      ? accName
+      : s2Keys.find((k) => /^(doner1|donor1|doner_1|donor_1|doner 1|donor 1|doner|donor|رقم حساب المدفوعات|حساب المدفوعات)$/i.test(k))
+        || s2Keys.find((k) => /(doner.*1|donor.*1|^doner$|^donor$|حساب.*مدفوعات|رقم.*المدفوعات)/i.test(k))
+        || s2Keys.find((k) => /حساب|كود|رقم.*مندوب|account|acc|code|doner|donor/i.test(k))
+        || '';
+
+    const effectiveRep = repNameCol && s2Sample[repNameCol] !== undefined
+      ? repNameCol
+      : s2Keys.find((k) => /اسم.*مندوب|اسم.*العميل|اسم.*المستخدم|اسم|rep.*name|agent.*name|name/i.test(k))
+        || effectiveAcc
+        || s2Keys[1] || s2Keys[0] || '';
+
+    const s3Sample = s3[0] || {};
+    const s3Keys = Object.keys(s3Sample);
+    const effectiveM3 = m3Name && s3Sample[m3Name] !== undefined
+      ? m3Name
+      : s3Keys.find((k) => /^(acceptor2|acceptor_2|acceptor 2|رقم ماكينه الكاش|ماكينه الكاش|ماكينة الكاش)$/i.test(k))
+        || s3Keys.find((k) => /(acceptor.*2|ماكين.*كاش|ماكينة.*الكاش)/i.test(k))
+        || s3Keys.find((k) => /ماكينة|جهاز|pos|machine|sn|acceptor/i.test(k))
+        || s3Keys[0] || '';
+
+    const effectiveCashAcc = cashAccName && s3Sample[cashAccName] !== undefined
+      ? cashAccName
+      : s3Keys.find((k) => /^(doner2|donor2|doner_2|donor_2|doner 2|donor 2|رقم الكاش المدفوعات|رقم الكاش|حساب الكاش)$/i.test(k))
+        || s3Keys.find((k) => /(doner.*2|donor.*2|كاش.*مدفوعات|رقم.*الكاش|حساب.*الكاش)/i.test(k))
+        || s3Keys.find((k) => /حساب|كود|رقم.*مندوب|account|acc|code|doner|donor/i.test(k))
+        || '';
+
+    const effectiveCashRep = cashRepNameCol && s3Sample[cashRepNameCol] !== undefined
+      ? cashRepNameCol
+      : s3Keys.find((k) => /اسم.*مندوب|اسم.*العميل|اسم.*المستخدم|اسم|rep.*name|agent.*name|name/i.test(k))
+        || effectiveCashAcc
+        || s3Keys[1] || s3Keys[0] || '';
+
     // Process Sheet 2 (Payments)
     for (let i = 0; i < s2.length; i++) {
       const row = s2[i];
-      const rawM = row[m2Name];
+      const rawM = row[effectiveM2];
       if (rawM !== undefined && rawM !== null && rawM !== '') {
         const rawMStr = String(rawM).trim();
         const key = normalizeMachineId(rawMStr);
-        const rawRepName = row[repNameCol];
+        const rawRepName = row[effectiveRep];
         const isRepNameEmpty =
           rawRepName === undefined ||
           rawRepName === null ||
@@ -282,11 +373,14 @@ export default function App() {
           String(rawRepName).trim() === '-' ||
           String(rawRepName).trim() === 'null';
 
-        const repName = isRepNameEmpty ? fallbackVal : String(rawRepName).trim();
         const repAcc =
-          accName && row[accName] !== undefined && row[accName] !== ''
-            ? String(row[accName]).trim()
+          effectiveAcc && row[effectiveAcc] !== undefined && row[effectiveAcc] !== ''
+            ? String(row[effectiveAcc]).trim()
             : 'غير متوفر';
+
+        const repName = isRepNameEmpty
+          ? (repAcc !== 'غير متوفر' ? `مندوب (${repAcc})` : fallbackVal)
+          : String(rawRepName).trim();
 
         if (repAcc !== 'غير متوفر') {
           const hasSpecialChars = /[^0-9\-_]/i.test(repAcc);
@@ -303,18 +397,23 @@ export default function App() {
         }
 
         if (!repMap.has(key)) repMap.set(key, []);
-        repMap.get(key)!.push({ account: repAcc, name: repName, isMissingRepName: isRepNameEmpty, type: 'payment' });
+        repMap.get(key)!.push({
+          account: repAcc,
+          name: repName,
+          isMissingRepName: isRepNameEmpty && repAcc === 'غير متوفر',
+          type: 'payment',
+        });
       }
     }
 
     // Process Sheet 3 (Cash)
     for (let i = 0; i < s3.length; i++) {
       const row = s3[i];
-      const rawM = row[m3Name];
+      const rawM = row[effectiveM3];
       if (rawM !== undefined && rawM !== null && rawM !== '') {
         const rawMStr = String(rawM).trim();
         const key = normalizeMachineId(rawMStr);
-        const rawRepName = row[cashRepNameCol];
+        const rawRepName = row[effectiveCashRep];
         const isRepNameEmpty =
           rawRepName === undefined ||
           rawRepName === null ||
@@ -322,11 +421,14 @@ export default function App() {
           String(rawRepName).trim() === '-' ||
           String(rawRepName).trim() === 'null';
 
-        const repName = isRepNameEmpty ? fallbackVal : String(rawRepName).trim();
         const repAcc =
-          cashAccName && row[cashAccName] !== undefined && row[cashAccName] !== ''
-            ? String(row[cashAccName]).trim()
+          effectiveCashAcc && row[effectiveCashAcc] !== undefined && row[effectiveCashAcc] !== ''
+            ? String(row[effectiveCashAcc]).trim()
             : 'غير متوفر';
+
+        const repName = isRepNameEmpty
+          ? (repAcc !== 'غير متوفر' ? `مسؤول كاش (${repAcc})` : fallbackVal)
+          : String(rawRepName).trim();
 
         if (repAcc !== 'غير متوفر') {
           const hasSpecialChars = /[^0-9\-_]/i.test(repAcc);
@@ -343,14 +445,19 @@ export default function App() {
         }
 
         if (!repMap.has(key)) repMap.set(key, []);
-        repMap.get(key)!.push({ account: repAcc, name: repName, isMissingRepName: isRepNameEmpty, type: 'cash' });
+        repMap.get(key)!.push({
+          account: repAcc,
+          name: repName,
+          isMissingRepName: isRepNameEmpty && repAcc === 'غير متوفر',
+          type: 'cash',
+        });
       }
     }
 
     // Audit duplicates in Sheet 1
     const machineCounts = new Map<string, number>();
     for (const row of s1) {
-      const m = row[m1Name];
+      const m = row[effectiveM1];
       if (m !== undefined && m !== null && m !== '') {
         const key = String(m).trim();
         machineCounts.set(key, (machineCounts.get(key) || 0) + 1);
@@ -370,7 +477,7 @@ export default function App() {
 
     for (let i = 0; i < s1.length; i++) {
       const row = s1[i];
-      const mVal = row[m1Name];
+      const mVal = row[effectiveM1];
       if (mVal === undefined || mVal === null || mVal === '') continue;
 
       const originalMachineId = String(mVal).trim();
@@ -471,19 +578,16 @@ export default function App() {
       return;
     }
 
-    if (sheet2.length > 0 && (!colM2 || !colRep)) {
-      showToast('⚠️ يرجى ضبط أعمدة الماكينة والمندوب لشيت المدفوعات في تبويب ضبط الأعمدة.');
-      setCurrentTab(4);
-      return;
-    }
+    const effectiveM1 = colM1 || (sheet1[0] ? Object.keys(sheet1[0])[0] : '');
+    const effectiveM2 = colM2 || (sheet2[0] ? Object.keys(sheet2[0])[0] : '');
+    const effectiveAcc = colAcc || (sheet2[0] ? Object.keys(sheet2[0])[0] : '');
+    const effectiveRep = colRep || effectiveAcc || (sheet2[0] ? Object.keys(sheet2[0])[0] : '');
 
-    if (sheet3.length > 0 && (!colM3 || !colCashRep)) {
-      showToast('⚠️ يرجى ضبط أعمدة الماكينة ومندوب الكاش لشيت الكاش في تبويب ضبط الأعمدة.');
-      setCurrentTab(4);
-      return;
-    }
+    const effectiveM3 = colM3 || (sheet3[0] ? Object.keys(sheet3[0])[0] : '');
+    const effectiveCashAcc = colCashAcc || (sheet3[0] ? Object.keys(sheet3[0])[0] : '');
+    const effectiveCashRep = colCashRep || effectiveCashAcc || (sheet3[0] ? Object.keys(sheet3[0])[0] : '');
 
-    executeReconciliation(sheet1, sheet2, sheet3, colM1, colM2, colAcc, colRep, colM3, colCashAcc, colCashRep, emptyRepFallback);
+    executeReconciliation(sheet1, sheet2, sheet3, effectiveM1, effectiveM2, effectiveAcc, effectiveRep, effectiveM3, effectiveCashAcc, effectiveCashRep, emptyRepFallback);
     showToast('⚡ تم تحديث ومطابقة البيانات بنجاح!');
     setCurrentTab(5);
   };
@@ -503,13 +607,17 @@ export default function App() {
     });
 
     try {
-      const data = await parseExcelFile(file);
+      const data = await parseExcelFile(file, 'machines');
       if (!data || data.length === 0) {
         setIsSheet1Loading(false);
         setProgressState((p) => ({ ...p, isOpen: false }));
         showToast('⚠️ لم يتم العثور على أسطر بيانات صالحة في «' + file.name + '». يرجى التأكد من محتوى الملف.');
         return;
       }
+
+      const cols1 = Object.keys(data[0] || {});
+      const activeM1 = cols1.find((c) => /ماكينة|جهاز|pos|machine|sn|id/i.test(c)) || cols1[0] || '';
+      if (activeM1) setColM1(activeM1);
 
       setProgressState((p) => ({
         ...p,
@@ -534,13 +642,29 @@ export default function App() {
 
       showToast(`⚡ تم قراءة شيت الماكينات فوراً (${data.length.toLocaleString('ar-EG')} ماكينة).`);
 
-      const canAutoRun = (sheet2.length > 0 || sheet3.length > 0) &&
-                         colM1 &&
-                         (sheet2.length === 0 || (colM2 && colRep)) &&
-                         (sheet3.length === 0 || (colM3 && colCashRep));
-      if (canAutoRun) {
+      const currentM1 = activeM1 || colM1;
+      if (sheet2.length > 0 || sheet3.length > 0) {
+        const s2Keys = sheet2[0] ? Object.keys(sheet2[0]) : [];
+        const effM2 = colM2 || s2Keys.find(k => /^(acceptor1|acceptor_1|acceptor 1|acceptor|ماكينة المدفوعات|ماكينه المدفوعات)$/i.test(k))
+          || s2Keys.find(k => /(acceptor.*1|^acceptor$|ماكين.*مدفوعات)/i.test(k)) || s2Keys[0] || '';
+        const effAcc = colAcc || s2Keys.find(k => /^(doner1|donor1|doner_1|donor_1|doner 1|donor 1|doner|donor|رقم حساب المدفوعات|حساب المدفوعات)$/i.test(k))
+          || s2Keys.find(k => /(doner.*1|donor.*1|^doner$|^donor$|حساب.*مدفوعات|رقم.*المدفوعات)/i.test(k))
+          || s2Keys.find(k => /حساب|كود|رقم.*مندوب|account|acc|code|doner|donor/i.test(k)) || '';
+        const effRep = colRep || s2Keys.find(k => /اسم.*مندوب|اسم.*العميل|اسم.*المستخدم|اسم|rep.*name|agent.*name|name/i.test(k))
+          || effAcc || s2Keys[1] || s2Keys[0] || '';
+
+        const s3Keys = sheet3[0] ? Object.keys(sheet3[0]) : [];
+        const effM3 = colM3 || s3Keys.find(k => /^(acceptor2|acceptor_2|acceptor 2|رقم ماكينه الكاش|ماكينه الكاش|ماكينة الكاش)$/i.test(k))
+          || s3Keys.find(k => /(acceptor.*2|ماكين.*كاش|ماكينة.*الكاش)/i.test(k)) || s3Keys[0] || '';
+        const effCashAcc = colCashAcc || s3Keys.find(k => /^(doner2|donor2|doner_2|donor_2|doner 2|donor 2|رقم الكاش المدفوعات|رقم الكاش|حساب الكاش)$/i.test(k))
+          || s3Keys.find(k => /(doner.*2|donor.*2|كاش.*مدفوعات|رقم.*الكاش|حساب.*الكاش)/i.test(k))
+          || s3Keys.find(k => /حساب|كود|رقم.*مندوب|account|acc|code|doner|donor/i.test(k)) || '';
+        const effCashRep = colCashRep || s3Keys.find(k => /اسم.*مندوب|اسم.*العميل|اسم.*المستخدم|اسم|rep.*name|agent.*name|name/i.test(k))
+          || effCashAcc || s3Keys[1] || s3Keys[0] || '';
+
         setTimeout(() => {
-          executeReconciliation(data, sheet2, sheet3, colM1, colM2, colAcc, colRep, colM3, colCashAcc, colCashRep, emptyRepFallback);
+          executeReconciliation(data, sheet2, sheet3, currentM1, effM2, effAcc, effRep, effM3, effCashAcc, effCashRep, emptyRepFallback);
+          showToast(`⚡ تم مطابقة شيت الماكينات فوراً مع المدفوعات والكاش!`);
         }, 10);
       }
     } catch (err: any) {
@@ -558,7 +682,7 @@ export default function App() {
       isOpen: true,
       title: 'قراءة',
       fileName: file.name,
-      subtitle: 'جاري تحليل خلايا وسجلات ملف الإكسل...',
+      subtitle: 'جاري تحليل خلايا وسجلات ملف الإكسل واستخراج بيانات المدفوعات...',
       percent: 25,
       stepText: 'تحويل ورقة العمل واستخراج بيانات الخلايا...',
       countText: '',
@@ -566,13 +690,43 @@ export default function App() {
     });
 
     try {
-      const data = await parseExcelFile(file);
+      const data = await parseExcelFile(file, 'payments');
       if (!data || data.length === 0) {
         setIsSheet2Loading(false);
         setProgressState((p) => ({ ...p, isOpen: false }));
         showToast('⚠️ لم يتم العثور على أسطر بيانات صالحة في شيت المدفوعات «' + file.name + '».');
         return;
       }
+
+      // Immediate Column Auto-detection for Payments
+      const cols2 = Object.keys(data[0] || {});
+      const activeM2 =
+        cols2.find((c) => /^(acceptor1|acceptor_1|acceptor 1|acceptor|ماكينة المدفوعات|ماكينه المدفوعات)$/i.test(c)) ||
+        cols2.find((c) => /(acceptor.*1|^acceptor$|ماكين.*مدفوعات)/i.test(c)) ||
+        cols2.find((c) => /ماكينة|جهاز|pos|machine|sn|acceptor/i.test(c)) ||
+        cols2[0] || '';
+
+      const activeAcc =
+        cols2.find((c) => /^(doner1|donor1|doner_1|donor_1|doner 1|donor 1|doner|donor|رقم حساب المدفوعات|حساب المدفوعات)$/i.test(c)) ||
+        cols2.find((c) => /(doner.*1|donor.*1|^doner$|^donor$|حساب.*مدفوعات|رقم.*المدفوعات)/i.test(c)) ||
+        cols2.find((c) => /حساب|كود|رقم.*مندوب|account|acc|code|doner|donor/i.test(c)) ||
+        '';
+
+      let activeRep = cols2.find((c) => /اسم.*مندوب|اسم.*العميل|اسم.*المستخدم|اسم|rep.*name|agent.*name|name/i.test(c));
+      if (!activeRep) {
+        activeRep = cols2.find((c) => /(مندوب|agent|rep)/i.test(c) && !/(رقم|حساب|كود|acc|code|id)/i.test(c));
+      }
+      if (!activeRep) {
+        activeRep =
+          cols2.find((c) => /(doner.*1|donor.*1|doner1|donor1|^doner$|^donor$)/i.test(c)) ||
+          cols2.find((c) => /(مندوب|agent|rep|doner|donor)/i.test(c)) ||
+          cols2[1] ||
+          cols2[0] || '';
+      }
+
+      setColM2(activeM2);
+      setColAcc(activeAcc);
+      setColRep(activeRep);
 
       setProgressState((p) => ({
         ...p,
@@ -587,7 +741,7 @@ export default function App() {
       setProgressState((p) => ({
         ...p,
         percent: 100,
-        stepText: `تم قراءة ${data.length.toLocaleString('ar-EG')} حساب بنجاح!`,
+        stepText: `تم قراءة ${data.length.toLocaleString('ar-EG')} حساب مدفوعات بنجاح!`,
         isComplete: true,
       }));
 
@@ -597,13 +751,14 @@ export default function App() {
 
       showToast(`⚡ تم قراءة شيت المدفوعات فوراً (${data.length.toLocaleString('ar-EG')} سجل).`);
 
+      const currentM1 = colM1 || (sheet1[0] ? Object.keys(sheet1[0])[0] : '');
       const canAutoRun = sheet1.length > 0 &&
-                         colM1 &&
-                         (colM2 && colRep) &&
+                         currentM1 &&
+                         (activeM2 && activeRep) &&
                          (sheet3.length === 0 || (colM3 && colCashRep));
       if (canAutoRun) {
         setTimeout(() => {
-          executeReconciliation(sheet1, data, sheet3, colM1, colM2, colAcc, colRep, colM3, colCashAcc, colCashRep, emptyRepFallback);
+          executeReconciliation(sheet1, data, sheet3, currentM1, activeM2, activeAcc, activeRep, colM3, colCashAcc, colCashRep, emptyRepFallback);
         }, 10);
       }
     } catch (err: any) {
@@ -621,7 +776,7 @@ export default function App() {
       isOpen: true,
       title: 'قراءة',
       fileName: file.name,
-      subtitle: 'جاري تحليل خلايا وسجلات ملف الإكسل...',
+      subtitle: 'جاري تحليل خلايا وسجلات ملف الإكسل واستخراج بيانات الكاش...',
       percent: 25,
       stepText: 'تحويل ورقة العمل واستخراج بيانات الخلايا...',
       countText: '',
@@ -629,13 +784,43 @@ export default function App() {
     });
 
     try {
-      const data = await parseExcelFile(file);
+      const data = await parseExcelFile(file, 'cash');
       if (!data || data.length === 0) {
         setIsSheet3Loading(false);
         setProgressState((p) => ({ ...p, isOpen: false }));
         showToast('⚠️ لم يتم العثور على أسطر بيانات صالحة في شيت الكاش «' + file.name + '».');
         return;
       }
+
+      // Immediate Column Auto-detection for Cash (Prioritize acceptor2 and doner2)
+      const cols3 = Object.keys(data[0] || {});
+      const activeM3 =
+        cols3.find((c) => /^(acceptor2|acceptor_2|acceptor 2|رقم ماكينه الكاش|ماكينه الكاش|ماكينة الكاش)$/i.test(c)) ||
+        cols3.find((c) => /(acceptor.*2|ماكين.*كاش|ماكينة.*الكاش)/i.test(c)) ||
+        cols3.find((c) => /ماكينة|جهاز|pos|machine|sn|acceptor/i.test(c)) ||
+        cols3[0] || '';
+
+      const activeCashAcc =
+        cols3.find((c) => /^(doner2|donor2|doner_2|donor_2|doner 2|donor 2|رقم الكاش المدفوعات|رقم الكاش|حساب الكاش)$/i.test(c)) ||
+        cols3.find((c) => /(doner.*2|donor.*2|كاش.*مدفوعات|رقم.*الكاش|حساب.*الكاش)/i.test(c)) ||
+        cols3.find((c) => /حساب|كود|رقم.*مندوب|account|acc|code|doner|donor/i.test(c)) ||
+        '';
+
+      let activeCashRep = cols3.find((c) => /اسم.*مندوب|اسم.*العميل|اسم.*المستخدم|اسم|rep.*name|agent.*name|name/i.test(c));
+      if (!activeCashRep) {
+        activeCashRep = cols3.find((c) => /(مندوب|agent|rep)/i.test(c) && !/(رقم|حساب|كود|acc|code|id)/i.test(c));
+      }
+      if (!activeCashRep) {
+        activeCashRep =
+          cols3.find((c) => /(doner.*2|donor.*2|doner2|donor2)/i.test(c)) ||
+          cols3.find((c) => /(مندوب|agent|rep|doner|donor)/i.test(c)) ||
+          cols3[1] ||
+          cols3[0] || '';
+      }
+
+      setColM3(activeM3);
+      setColCashAcc(activeCashAcc);
+      setColCashRep(activeCashRep);
 
       setProgressState((p) => ({
         ...p,
@@ -658,15 +843,19 @@ export default function App() {
         setProgressState((p) => ({ ...p, isOpen: false }));
       }, 500);
 
-      showToast(`⚡ تم قراءة شيت الكاش فوراً (${data.length.toLocaleString('ar-EG')} سجل).`);
+      const columnNote = (activeM3 === 'acceptor2' || activeCashAcc === 'doner2')
+        ? ` (تم استخراج أعمدة الكاش المخصصة: ${activeM3} و ${activeCashAcc})`
+        : '';
+      showToast(`⚡ تم قراءة شيت الكاش فوراً (${data.length.toLocaleString('ar-EG')} سجل)${columnNote}.`);
 
+      const currentM1 = colM1 || (sheet1[0] ? Object.keys(sheet1[0])[0] : '');
       const canAutoRun = sheet1.length > 0 &&
-                         colM1 &&
+                         currentM1 &&
                          (sheet2.length === 0 || (colM2 && colRep)) &&
-                         (colM3 && colCashRep);
+                         (activeM3 && activeCashRep);
       if (canAutoRun) {
         setTimeout(() => {
-          executeReconciliation(sheet1, sheet2, data, colM1, colM2, colAcc, colRep, colM3, colCashAcc, colCashRep, emptyRepFallback);
+          executeReconciliation(sheet1, sheet2, data, currentM1, colM2, colAcc, colRep, activeM3, activeCashAcc, activeCashRep, emptyRepFallback);
         }, 10);
       }
     } catch (err: any) {
@@ -835,14 +1024,52 @@ export default function App() {
     showToast('🗑️ تم مسح كافة البيانات وتفريغ النظام بالكامل.');
   };
 
-  // Export results to Excel
+  // Export results to Excel (automatically splits across sheets if > 900k rows)
   const handleExportExcel = () => {
     if (!expandedRows.length) {
       showToast('⚠️ لا توجد نتائج لتصديرها. ارفع الشيتات أو اختر «عينة فورية».');
       return;
     }
     exportReconciliationToExcel(expandedRows);
-    showToast('📥 تم تصدير ملف الإكسل المفصل بنجاح!');
+    showToast('📥 تم تصدير ملف الإكسل المفصل بنجاح! (مقسم تلقائياً لشيتات إذا تجاوز 900 ألف صف)');
+  };
+
+  // Export results to CSV (uncapped rows, supports millions of rows without limits)
+  const handleExportCsv = () => {
+    if (!expandedRows.length) {
+      showToast('⚠️ لا توجد نتائج لتصديرها. ارفع الشيتات أو اختر «عينة فورية».');
+      return;
+    }
+    exportReconciliationToCsv(expandedRows);
+    showToast('📥 تم تصدير ملف الـ CSV الشامل بنجاح (بدون أي سقف لعدد الصفوف)!');
+  };
+
+  // Apply records directly from Big File Splitter Modal into Cash Sheet
+  const handleApplyToCashSheetFromSplitter = (rows: SheetRow[], fileName: string) => {
+    setSheet3(rows);
+    setSheet3FileName(fileName);
+    showToast(`✅ تم اعتماد ${rows.length.toLocaleString('ar-EG')} سجل كاش بنجاح بالمنظومة!`);
+
+    if (sheet1.length > 0) {
+      const activeColM1 = colM1 || Object.keys(sheet1[0])[0];
+      const activeColM2 = colM2 || (sheet2[0] ? Object.keys(sheet2[0])[0] : '');
+      const activeColM3 = colM3 || (rows[0] ? Object.keys(rows[0])[0] : '');
+      setTimeout(() => {
+        executeReconciliation(
+          sheet1,
+          sheet2,
+          rows,
+          activeColM1,
+          activeColM2,
+          colAcc,
+          colRep,
+          activeColM3,
+          colCashAcc,
+          colCashRep,
+          emptyRepFallback
+        );
+      }, 10);
+    }
   };
 
   // Automatically prepend "7-" to all machine numbers in Cash sheet (Sheet 3) and ONLY pure cash machines in Sheet 1
@@ -1067,13 +1294,36 @@ export default function App() {
   // Filtered rows for Tab 5
   const filteredRows = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
+    const qNorm = normalizeMachineId(q);
+    const qClean = q
+      .replace(/[\u200B-\u200D\uFEFF\u00A0]/g, '')
+      .trim()
+      .toLowerCase()
+      .replace(/[٠-٩]/g, (d) => String('٠١٢٣٤٥٦٧٨٩'.indexOf(d)))
+      .replace(/\.0$/, '');
+
     return expandedRows.filter((item) => {
       if (currentFilter !== 'all' && item.status !== currentFilter) return false;
       if (accountTypeFilter === 'cash' && item.type !== 'cash') return false;
       if (accountTypeFilter === 'payments' && item.type !== 'payment') return false;
       if (q) {
-        const matchM = item.machine.toLowerCase().includes(q);
-        const matchAcc = item.account.toLowerCase().includes(q);
+        const itemMNorm = normalizeMachineId(item.machine).toLowerCase();
+        const matchM =
+          item.machine.toLowerCase().includes(q) ||
+          (qNorm ? itemMNorm.includes(qNorm) : false);
+
+        const accClean = item.account
+          .replace(/[\u200B-\u200D\uFEFF\u00A0]/g, '')
+          .trim()
+          .toLowerCase()
+          .replace(/[٠-٩]/g, (d) => String('٠١٢٣٤٥٦٧٨٩'.indexOf(d)))
+          .replace(/\.0$/, '');
+
+        const matchAcc =
+          item.account.toLowerCase().includes(q) ||
+          (qClean !== '' && accClean.includes(qClean)) ||
+          (qClean !== '' && qClean.includes(accClean) && accClean !== 'غير متوفر');
+
         const matchRep = item.repName.toLowerCase().includes(q);
         return matchM || matchAcc || matchRep;
       }
@@ -1087,6 +1337,61 @@ export default function App() {
     const start = (currentPage - 1) * pageSize;
     return filteredRows.slice(start, start + pageSize);
   }, [filteredRows, currentPage, pageSize]);
+
+  // Compute unique machines list for Split-View
+  const uniqueMachinesInFilter = useMemo(() => {
+    const seen = new Set<string>();
+    const list: ExpandedRow[] = [];
+    for (const item of filteredRows) {
+      if (!seen.has(item.machine)) {
+        seen.add(item.machine);
+        list.push(item);
+      }
+    }
+    return list;
+  }, [filteredRows]);
+
+  // Auto-select first unique machine on filter change
+  useEffect(() => {
+    if (viewMode === 'split' && uniqueMachinesInFilter.length > 0) {
+      const exists = uniqueMachinesInFilter.some(m => m.machine === splitSelectedMachine);
+      if (!exists) {
+        setSplitSelectedMachine(uniqueMachinesInFilter[0].machine);
+      }
+    }
+  }, [uniqueMachinesInFilter, viewMode, splitSelectedMachine]);
+
+  // Retrieve original records from Sheet 2 for Split-View
+  const getPaymentsRowsForMachine = (machineId: string) => {
+    if (!sheet2.length) return [];
+    const s2Sample = sheet2[0] || {};
+    const s2Keys = Object.keys(s2Sample);
+    const effectiveM2 = colM2 && s2Sample[colM2] !== undefined
+      ? colM2
+      : s2Keys.find((k) => /^(acceptor1|acceptor_1|acceptor 1|acceptor|ماكينة المدفوعات|ماكينه المدفوعات)$/i.test(k))
+        || s2Keys.find((k) => /(acceptor.*1|^acceptor$|ماكين.*مدفوعات)/i.test(k))
+        || s2Keys.find((k) => /ماكينة|جهاز|pos|machine|sn|acceptor/i.test(k))
+        || s2Keys[0] || '';
+    
+    const normId = normalizeMachineId(machineId);
+    return sheet2.filter(row => normalizeMachineId(row[effectiveM2]) === normId);
+  };
+
+  // Retrieve original records from Sheet 3 for Split-View
+  const getCashRowsForMachine = (machineId: string) => {
+    if (!sheet3.length) return [];
+    const s3Sample = sheet3[0] || {};
+    const s3Keys = Object.keys(s3Sample);
+    const effectiveM3 = colM3 && s3Sample[colM3] !== undefined
+      ? colM3
+      : s3Keys.find((k) => /^(acceptor2|acceptor_2|acceptor 2|رقم ماكينه الكاش|ماكينه الكاش|ماكينة الكاش)$/i.test(k))
+        || s3Keys.find((k) => /(acceptor.*2|ماكين.*كاش|ماكينة.*الكاش)/i.test(k))
+        || s3Keys.find((k) => /ماكينة|جهاز|pos|machine|sn|acceptor/i.test(k))
+        || s3Keys[0] || '';
+    
+    const normId = normalizeMachineId(machineId);
+    return sheet3.filter(row => normalizeMachineId(row[effectiveM3]) === normId);
+  };
 
   // Virtualization / Windowing Setup for High Performance Rendering in Tab 4
   const [tableScrollTop, setTableScrollTop] = useState(0);
@@ -1259,6 +1564,13 @@ export default function App() {
           setCurrentTab(4);
           showToast(`🔍 تم تصفية الجدول للماكينات المربوطة بالمندوب: ${query}`);
         }}
+      />
+
+      {/* Big File (+1.66M Rows) Splitter Modal */}
+      <BigFileSplitterModal
+        isOpen={isSplitterOpen}
+        onClose={() => setIsSplitterOpen(false)}
+        onApplyToCashSheet={handleApplyToCashSheetFromSplitter}
       />
 
       {/* Desktop Header */}
@@ -2235,7 +2547,7 @@ export default function App() {
                         <thead className="bg-slate-200/80 dark:bg-slate-900 text-slate-700 dark:text-slate-300 font-bold sticky top-0 border-b border-slate-200 dark:border-slate-800 z-10">
                           <tr>
                             <th className="p-2.5 w-12 text-center font-mono">م</th>
-                            {Object.keys(sheet1[0]).map((col) => (
+                            {Object.keys(sheet1[0]).filter((col) => !col.startsWith('_')).map((col) => (
                               <th key={col} className="p-2.5">{col}</th>
                             ))}
                             <th className="p-2.5 text-center">تصنيف الماكينة</th>
@@ -2244,7 +2556,7 @@ export default function App() {
                         <tbody className="divide-y divide-slate-200 dark:divide-slate-800/60 font-mono">
                           {filteredPreviewRows.length === 0 ? (
                             <tr>
-                              <td colSpan={Object.keys(sheet1[0]).length + 2} className="p-8 text-center text-slate-400">
+                              <td colSpan={Object.keys(sheet1[0]).filter((col) => !col.startsWith('_')).length + 2} className="p-8 text-center text-slate-400">
                                 لا توجد ماكينات مطابقة لهذا التصنيف في الشيت المرفوع حالياً.
                               </td>
                             </tr>
@@ -2256,7 +2568,7 @@ export default function App() {
                               return (
                                 <tr key={idx} className="hover:bg-slate-100 dark:hover:bg-slate-800/60 transition-colors">
                                   <td className="p-2 text-center text-slate-400 font-bold">{idx + 1}</td>
-                                  {Object.keys(sheet1[0]).map((col) => (
+                                  {Object.keys(sheet1[0]).filter((col) => !col.startsWith('_')).map((col) => (
                                     <td key={col} className="p-2 font-bold text-slate-800 dark:text-slate-200">
                                       {String(row[col] ?? '')}
                                     </td>
@@ -2392,7 +2704,7 @@ export default function App() {
                         <thead className="bg-slate-200/80 dark:bg-slate-900 text-slate-700 dark:text-slate-300 font-bold sticky top-0 border-b border-slate-200 dark:border-slate-800 z-10">
                           <tr>
                             <th className="p-2.5 w-12 text-center font-mono">م</th>
-                            {Object.keys(sheet2[0]).map((col) => (
+                            {Object.keys(sheet2[0]).filter((col) => !col.startsWith('_')).map((col) => (
                               <th key={col} className="p-2.5">{col}</th>
                             ))}
                           </tr>
@@ -2401,7 +2713,7 @@ export default function App() {
                           {sheet2.slice(0, 25).map((row, idx) => (
                             <tr key={idx} className="hover:bg-slate-100 dark:hover:bg-slate-800/60 transition-colors">
                               <td className="p-2 text-center text-slate-400 font-bold">{idx + 1}</td>
-                              {Object.keys(sheet2[0]).map((col) => (
+                              {Object.keys(sheet2[0]).filter((col) => !col.startsWith('_')).map((col) => (
                                 <td key={col} className="p-2 font-bold text-slate-800 dark:text-slate-200">
                                   {String(row[col] ?? '')}
                                 </td>
@@ -2439,7 +2751,15 @@ export default function App() {
                   </p>
                 </div>
 
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <button
+                    onClick={() => setIsSplitterOpen(true)}
+                    className="px-3 py-1.5 text-xs font-bold rounded-xl bg-amber-500/15 hover:bg-amber-500/25 text-amber-400 border border-amber-500/30 flex items-center gap-1.5 transition-colors cursor-pointer"
+                    title="أداة خاصة لمعالجة وتقسيم ملفات الكاش الضخمة التي تتجاوز 1.66 مليون صف"
+                  >
+                    <Split className="w-3.5 h-3.5 text-amber-400" />
+                    <span>⚡ معالج الملفات المليونية (+1.66M)</span>
+                  </button>
                   <button
                     onClick={() => downloadTemplateFile(3, 'xlsx')}
                     className="px-3 py-1.5 text-xs font-bold rounded-xl bg-emerald-50 hover:bg-emerald-100 dark:bg-emerald-950/60 text-emerald-600 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800 flex items-center gap-1.5 transition-colors cursor-pointer"
@@ -2448,6 +2768,22 @@ export default function App() {
                     <span>تحميل نموذج القالب</span>
                   </button>
                 </div>
+              </div>
+
+              {/* 1.66 Million Rows Alert Banner */}
+              <div className="p-3.5 rounded-2xl bg-amber-500/10 border border-amber-500/30 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs mb-4">
+                <div className="flex items-center gap-2.5 text-amber-300">
+                  <Info className="w-4 h-4 shrink-0 text-amber-400" />
+                  <span>
+                    <strong>هل يحتوي ملف الكاش على أكثر من مليون صف (مثل 1.66 مليون صف)؟</strong> يقوم برنامج الإكسل بقص الملف تلقائياً عند 1,048,576 صف. استخدم أداة التقسيم المدمجة لتجزئته لورقات عمل متعددة لتظهر كافة البيانات دون نقصان!
+                  </span>
+                </div>
+                <button
+                  onClick={() => setIsSplitterOpen(true)}
+                  className="px-3.5 py-1.5 bg-amber-500 hover:bg-amber-400 text-slate-950 font-black rounded-xl text-xs transition cursor-pointer shrink-0 shadow-sm"
+                >
+                  فتح أداة التقسيم المليونية &larr;
+                </button>
               </div>
 
               {/* Dropzone */}
@@ -2539,7 +2875,7 @@ export default function App() {
                         <thead className="bg-slate-200/80 dark:bg-slate-900 text-slate-700 dark:text-slate-300 font-bold sticky top-0 border-b border-slate-200 dark:border-slate-800 z-10">
                           <tr>
                             <th className="p-2.5 w-12 text-center font-mono">م</th>
-                            {Object.keys(sheet3[0]).map((col) => (
+                            {Object.keys(sheet3[0]).filter((col) => !col.startsWith('_')).map((col) => (
                               <th key={col} className="p-2.5">{col}</th>
                             ))}
                           </tr>
@@ -2548,7 +2884,7 @@ export default function App() {
                           {sheet3.slice(0, 25).map((row, idx) => (
                             <tr key={idx} className="hover:bg-slate-100 dark:hover:bg-slate-800/60 transition-colors">
                               <td className="p-2 text-center text-slate-400 font-bold">{idx + 1}</td>
-                              {Object.keys(sheet3[0]).map((col) => (
+                              {Object.keys(sheet3[0]).filter((col) => !col.startsWith('_')).map((col) => (
                                 <td key={col} className="p-2 font-bold text-slate-800 dark:text-slate-200">
                                   {String(row[col] ?? '')}
                                 </td>
@@ -2603,11 +2939,13 @@ export default function App() {
                     onChange={(e) => setColM1(e.target.value)}
                   >
                     {sheet1.length > 0 ? (
-                      Object.keys(sheet1[0]).map((c) => (
-                        <option key={c} value={c}>
-                          {c}
-                        </option>
-                      ))
+                      Object.keys(sheet1[0])
+                        .filter((c) => !c.startsWith('_'))
+                        .map((c) => (
+                          <option key={c} value={c}>
+                            {c}
+                          </option>
+                        ))
                     ) : (
                       <option value="">-- يرجى رفع شيت الماكينات أولاً --</option>
                     )}
@@ -2626,11 +2964,13 @@ export default function App() {
                     onChange={(e) => setColM2(e.target.value)}
                   >
                     {sheet2.length > 0 ? (
-                      Object.keys(sheet2[0]).map((c) => (
-                        <option key={c} value={c}>
-                          {c}
-                        </option>
-                      ))
+                      Object.keys(sheet2[0])
+                        .filter((c) => !c.startsWith('_'))
+                        .map((c) => (
+                          <option key={c} value={c}>
+                            {c}
+                          </option>
+                        ))
                     ) : (
                       <option value="">-- يرجى رفع شيت المدفوعات أولاً --</option>
                     )}
@@ -2650,11 +2990,13 @@ export default function App() {
                   >
                     <option value="">-- بدون عمود حساب --</option>
                     {sheet2.length > 0 &&
-                      Object.keys(sheet2[0]).map((c) => (
-                        <option key={c} value={c}>
-                          {c}
-                        </option>
-                      ))}
+                      Object.keys(sheet2[0])
+                        .filter((c) => !c.startsWith('_'))
+                        .map((c) => (
+                          <option key={c} value={c}>
+                            {c}
+                          </option>
+                        ))}
                   </select>
                   <p className="text-[10px] text-slate-400">كود / حساب مسؤول المدفوعات</p>
                 </div>
@@ -2670,11 +3012,13 @@ export default function App() {
                     onChange={(e) => setColRep(e.target.value)}
                   >
                     {sheet2.length > 0 ? (
-                      Object.keys(sheet2[0]).map((c) => (
-                        <option key={c} value={c}>
-                          {c}
-                        </option>
-                      ))
+                      Object.keys(sheet2[0])
+                        .filter((c) => !c.startsWith('_'))
+                        .map((c) => (
+                          <option key={c} value={c}>
+                            {c}
+                          </option>
+                        ))
                     ) : (
                       <option value="">-- يرجى رفع شيت المدفوعات أولاً --</option>
                     )}
@@ -2696,11 +3040,13 @@ export default function App() {
                     onChange={(e) => setColM3(e.target.value)}
                   >
                     {sheet3.length > 0 ? (
-                      Object.keys(sheet3[0]).map((c) => (
-                        <option key={c} value={c}>
-                          {c}
-                        </option>
-                      ))
+                      Object.keys(sheet3[0])
+                        .filter((c) => !c.startsWith('_'))
+                        .map((c) => (
+                          <option key={c} value={c}>
+                            {c}
+                          </option>
+                        ))
                     ) : (
                       <option value="">-- يرجى رفع شيت الكاش أولاً --</option>
                     )}
@@ -2720,11 +3066,13 @@ export default function App() {
                   >
                     <option value="">-- بدون عمود حساب كاش --</option>
                     {sheet3.length > 0 &&
-                      Object.keys(sheet3[0]).map((c) => (
-                        <option key={c} value={c}>
-                          {c}
-                        </option>
-                      ))}
+                      Object.keys(sheet3[0])
+                        .filter((c) => !c.startsWith('_'))
+                        .map((c) => (
+                          <option key={c} value={c}>
+                            {c}
+                          </option>
+                        ))}
                   </select>
                   <p className="text-[10px] text-slate-400">كود / حساب مسؤول الكاش</p>
                 </div>
@@ -2740,11 +3088,13 @@ export default function App() {
                     onChange={(e) => setColCashRep(e.target.value)}
                   >
                     {sheet3.length > 0 ? (
-                      Object.keys(sheet3[0]).map((c) => (
-                        <option key={c} value={c}>
-                          {c}
-                        </option>
-                      ))
+                      Object.keys(sheet3[0])
+                        .filter((c) => !c.startsWith('_'))
+                        .map((c) => (
+                          <option key={c} value={c}>
+                            {c}
+                          </option>
+                        ))
                     ) : (
                       <option value="">-- يرجى رفع شيت الكاش أولاً --</option>
                     )}
@@ -2955,7 +3305,7 @@ export default function App() {
                     )}
                   </div>
 
-                  {/* Segmented Control for Table vs Cards */}
+                  {/* Segmented Control for Table vs Cards vs Split-View */}
                   <div className="inline-flex rounded-xl p-1 bg-slate-900 border border-slate-800 text-xs font-bold shrink-0">
                     <button
                       onClick={() => setViewMode('table')}
@@ -2980,6 +3330,18 @@ export default function App() {
                     >
                       <Layers className="w-3.5 h-3.5" />
                       <span>عرض البطاقات (Cards)</span>
+                    </button>
+                    <button
+                      onClick={() => setViewMode('split')}
+                      className={`px-3 py-1.5 rounded-lg flex items-center gap-1.5 transition-all cursor-pointer ${
+                        viewMode === 'split'
+                          ? 'bg-indigo-600 text-white shadow-sm'
+                          : 'text-slate-400 hover:text-white'
+                      }`}
+                      title="مقارنة جانبية لبيانات الكاش والمدفوعات لنفس الماكينة"
+                    >
+                      <Split className="w-3.5 h-3.5" />
+                      <span>مقارنة جانبية (Split-View)</span>
                     </button>
                   </div>
                 </div>
@@ -3104,22 +3466,31 @@ export default function App() {
                     </button>
                   </div>
 
-                  {/* Excel Export & Print Buttons */}
-                  <div className="flex items-center gap-2">
+                  {/* Excel, CSV Export & Print Buttons */}
+                  <div className="flex items-center gap-2 flex-wrap">
                     <button
                       onClick={() => window.print()}
-                      className="px-3.5 py-2 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold flex items-center gap-1.5 shadow-md transition-colors cursor-pointer shrink-0"
+                      className="px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-white text-xs font-bold flex items-center gap-1.5 shadow-md transition-colors cursor-pointer shrink-0 border border-slate-700"
                       title="طباعة التقرير أو حفظه كملف PDF"
                     >
-                      <Download className="w-4 h-4 text-blue-200" />
+                      <Download className="w-4 h-4 text-slate-300" />
                       <span>طباعة / PDF</span>
+                    </button>
+                    <button
+                      onClick={handleExportCsv}
+                      className="px-3.5 py-2 rounded-xl bg-blue-700 hover:bg-blue-600 text-white text-xs font-bold flex items-center gap-1.5 shadow-md transition-colors cursor-pointer shrink-0"
+                      title="تصدير ملف CSV كامل بدون أي سقف لعدد الصفوف (يتحمل أكثر من 2 مليون صف دون أي اقتطاع)"
+                    >
+                      <Download className="w-4 h-4 text-blue-200" />
+                      <span>تصدير CSV شامل (+1M صف)</span>
                     </button>
                     <button
                       onClick={handleExportExcel}
                       className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold flex items-center gap-2 shadow-md transition-colors cursor-pointer shrink-0"
+                      title="تصدير كملف إكسل (يتم تجزئته لورقات عمل متعددة تلقائياً إذا تجاوز 900 ألف صف)"
                     >
                       <FileSpreadsheet className="w-4 h-4 text-emerald-200" />
-                      <span>تصدير Excel (أسطر منفصلة)</span>
+                      <span>تصدير Excel (مقسم تلقائياً)</span>
                     </button>
                   </div>
                 </div>
@@ -3274,6 +3645,269 @@ export default function App() {
                       </div>
                     </div>
                   )}
+                </div>
+              ) : viewMode === 'split' ? (
+                <div className="grid grid-cols-1 lg:grid-cols-4 gap-5 text-slate-200">
+                  {/* Right Sidebar: list of unique machines */}
+                  <div className="lg:col-span-1 bg-slate-900/50 border border-slate-800 rounded-3xl p-4 flex flex-col space-y-3.5">
+                    <div className="border-b border-slate-800 pb-2.5 flex items-center justify-between">
+                      <span className="text-xs font-bold text-indigo-400">ماكينات التصفية</span>
+                      <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-slate-800 text-slate-300">
+                        {uniqueMachinesInFilter.length} ماكينة
+                      </span>
+                    </div>
+
+                    {uniqueMachinesInFilter.length === 0 ? (
+                      <div className="text-center py-8 text-slate-500 text-xs">
+                        لا توجد نتائج مطابقة للبحث أو الفلتر المختار.
+                      </div>
+                    ) : (
+                      <div className="space-y-2 max-h-[500px] overflow-y-auto pr-1">
+                        {uniqueMachinesInFilter.map((m) => {
+                          const isSelected = m.machine === splitSelectedMachine;
+                          return (
+                            <button
+                              key={m.machine}
+                              onClick={() => setSplitSelectedMachine(m.machine)}
+                              className={`w-full text-right p-3 rounded-2xl border text-xs flex flex-col gap-1 transition-all cursor-pointer ${
+                                isSelected
+                                  ? 'bg-indigo-600/25 border-indigo-500 text-white font-bold shadow-md'
+                                  : 'bg-[#0c1220]/60 border-slate-800/80 hover:bg-slate-800/40 text-slate-300'
+                              }`}
+                            >
+                              <div className="flex items-center justify-between w-full">
+                                <span className="font-mono font-black">{m.machine}</span>
+                                <span
+                                  className={`px-1.5 py-0.5 rounded-md text-[9px] font-black border ${
+                                    m.status === 'single'
+                                      ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20'
+                                      : m.status === 'multi'
+                                      ? 'bg-amber-500/10 text-amber-400 border-amber-500/20'
+                                      : 'bg-rose-500/10 text-rose-400 border-rose-500/20'
+                                  }`}
+                                >
+                                  {m.status === 'single' ? 'مندوب واحد' : m.status === 'multi' ? 'متعددة' : 'شاغرة'}
+                                </span>
+                              </div>
+                              <span className="text-[10px] text-slate-400 block truncate font-medium">
+                                {m.repName || 'لا يوجد مندوب'}
+                              </span>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Left Main Area: side-by-side comparison panels */}
+                  <div className="lg:col-span-3 flex flex-col space-y-4">
+                    {!splitSelectedMachine ? (
+                      <div className="p-16 text-center text-slate-400 bg-slate-900/40 border border-slate-800 rounded-3xl flex flex-col items-center justify-center space-y-3">
+                        <Split className="w-12 h-12 text-indigo-500 animate-pulse" />
+                        <p className="font-bold text-sm text-slate-200">الرجاء اختيار ماكينة من القائمة الجانبية لبدء المقارنة الفورية</p>
+                        <p className="text-xs text-slate-400 max-w-md leading-relaxed">
+                          سيتم سحب كافة البيانات الأصلية والأسطر لهذه الماكينة من شيت المدفوعات وشيت الكاش وعرضها جنباً إلى جنب لمطابقة أسرع وأدق.
+                        </p>
+                      </div>
+                    ) : (() => {
+                      const payRows = getPaymentsRowsForMachine(splitSelectedMachine);
+                      const cashRows = getCashRowsForMachine(splitSelectedMachine);
+
+                      const totalPayCount = payRows.length;
+                      const totalCashCount = cashRows.length;
+
+                      // Extract and cleanup unique accounts in both sheets
+                      const payAccounts = Array.from(
+                        new Set(
+                          payRows
+                            .map((r) => String(r[colAcc || Object.keys(r)[0] || ''] || '').trim())
+                            .filter((val) => val && val !== 'غير متوفر')
+                        )
+                      );
+                      const cashAccounts = Array.from(
+                        new Set(
+                          cashRows
+                            .map((r) => String(r[colCashAcc || Object.keys(r)[0] || ''] || '').trim())
+                            .filter((val) => val && val !== 'غير متوفر')
+                        )
+                      );
+
+                      // Determine if a dispute or difference exists
+                      const countMismatch = totalPayCount !== totalCashCount;
+                      const accountsMismatch =
+                        payAccounts.length !== cashAccounts.length ||
+                        payAccounts.some((acc) => !cashAccounts.includes(acc)) ||
+                        cashAccounts.some((acc) => !payAccounts.includes(acc));
+
+                      const hasDiscrepancy = countMismatch || accountsMismatch;
+
+                      return (
+                        <div className="space-y-4 font-['Cairo']">
+                          {/* Discrepancy analysis alert */}
+                          <div
+                            className={`p-4 rounded-3xl border flex flex-col md:flex-row justify-between items-start md:items-center gap-4 transition-colors ${
+                              hasDiscrepancy
+                                ? 'bg-amber-500/10 border-amber-500/30 text-amber-200'
+                                : 'bg-emerald-500/10 border-emerald-500/25 text-emerald-200'
+                            }`}
+                          >
+                            <div className="space-y-1">
+                              <div className="flex items-center gap-2">
+                                <span
+                                  className={`w-2.5 h-2.5 rounded-full ${
+                                    hasDiscrepancy ? 'bg-amber-500 animate-ping' : 'bg-emerald-500'
+                                  }`}
+                                />
+                                <h4 className="font-bold text-sm text-white">
+                                  تحليل المطابقة التلقائية: <span className="font-mono text-indigo-400 font-black">{splitSelectedMachine}</span>
+                                </h4>
+                              </div>
+                              <p className="text-[11px] text-slate-300 leading-relaxed">
+                                {hasDiscrepancy
+                                  ? '⚠️ تم الكشف عن تباين: الماكينة لديها عدد أسطر مختلف أو مناديب غير متطابقين بين الشيتين!'
+                                  : '✅ تطابق تام: الماكينة مرتبطة بنفس الحسابات والمناديب في كلا شيتي الكاش والمدفوعات.'}
+                              </p>
+                            </div>
+                            <div className="flex gap-2 shrink-0 flex-wrap font-sans">
+                              <span className="text-[10px] font-bold px-3 py-1 rounded-full bg-slate-950/60 text-slate-300 border border-slate-800">
+                                💳 المدفوعات: {totalPayCount} سجل
+                              </span>
+                              <span className="text-[10px] font-bold px-3 py-1 rounded-full bg-slate-950/60 text-slate-300 border border-slate-800">
+                                💵 الكاش: {totalCashCount} سجل
+                              </span>
+                            </div>
+                          </div>
+
+                          {/* Two Side-by-Side adjacent panels */}
+                          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            {/* Payments Column */}
+                            <div className="bg-slate-900/40 border border-slate-800 rounded-3xl p-4 flex flex-col space-y-3">
+                              <div className="border-b border-slate-800 pb-3 flex items-center justify-between">
+                                <div className="flex items-center gap-2">
+                                  <span className="text-base">💳</span>
+                                  <span className="font-bold text-xs text-blue-400">سجلات شيت المدفوعات</span>
+                                </div>
+                                <span className="text-[10px] px-2.5 py-0.5 rounded-full bg-blue-500/10 text-blue-300 border border-blue-500/20 font-mono font-black">
+                                  {totalPayCount} سجل
+                                </span>
+                              </div>
+
+                              {totalPayCount === 0 ? (
+                                <div className="p-10 text-center text-slate-500 border border-dashed border-slate-800 rounded-2xl space-y-1.5">
+                                  <p className="text-xs">لا توجد سجلات لهذه الماكينة في شيت المدفوعات.</p>
+                                  <p className="text-[10px] text-slate-600 font-sans">يرجى التأكد من اختيار العمود الصحيح للماكينة.</p>
+                                </div>
+                              ) : (
+                                <div className="space-y-4 max-h-[420px] overflow-y-auto pr-1">
+                                  {payRows.map((row, rIdx) => {
+                                    const mappedAcc = row[colAcc || Object.keys(row)[0]] || 'غير متوفر';
+                                    const mappedRepName = row[colRep || Object.keys(row)[1]] || 'لا يوجد مندوب';
+                                    return (
+                                      <div
+                                        key={rIdx}
+                                        className="p-3.5 rounded-2xl bg-slate-950/40 border border-slate-800 hover:border-slate-700/80 transition-all space-y-3 text-right"
+                                      >
+                                        <div className="flex justify-between items-center text-[11px] border-b border-slate-800/60 pb-2">
+                                          <span className="font-bold text-slate-400">سجل #{rIdx + 1}</span>
+                                          <span className="font-mono text-indigo-400 font-black bg-indigo-500/10 px-2 py-0.5 rounded-md border border-indigo-500/20">
+                                            حساب: {mappedAcc}
+                                          </span>
+                                        </div>
+                                        <div className="text-xs">
+                                          <p className="font-bold text-slate-200">
+                                            اسم المندوب: <span className="text-white font-black">{mappedRepName}</span>
+                                          </p>
+                                        </div>
+
+                                        {/* Grid of all other columns in that row */}
+                                        <div className="grid grid-cols-2 gap-2 text-[10px] pt-2 border-t border-slate-800/40 font-mono text-right">
+                                          {Object.entries(row).map(([key, val]) => {
+                                            if ([colM2, colAcc, colRep].includes(key)) return null;
+                                            return (
+                                              <div
+                                                key={key}
+                                                className="bg-[#0c1220]/50 p-2 rounded-xl border border-slate-800/40 truncate text-right"
+                                                title={`${key}: ${val}`}
+                                              >
+                                                <span className="text-slate-500 block text-[9px] mb-0.5 truncate">{key}</span>
+                                                <span className="text-slate-300 font-bold truncate block">{String(val ?? '-')}</span>
+                                              </div>
+                                            );
+                                          })}
+                                        </div>
+                                      </div>
+                                    );
+                                  })}
+                                </div>
+                              )}
+                            </div>
+
+                            {/* Cash Column */}
+                            <div className="bg-slate-900/40 border border-slate-800 rounded-3xl p-4 flex flex-col space-y-3">
+                              <div className="border-b border-slate-800 pb-3 flex items-center justify-between">
+                                <div className="flex items-center gap-2">
+                                  <span className="text-base">💵</span>
+                                  <span className="font-bold text-xs text-emerald-400">سجلات شيت الكاش</span>
+                                </div>
+                                <span className="text-[10px] px-2.5 py-0.5 rounded-full bg-emerald-500/10 text-emerald-300 border border-emerald-500/20 font-mono font-black">
+                                  {totalCashCount} سجل
+                                </span>
+                              </div>
+
+                              {totalCashCount === 0 ? (
+                                <div className="p-10 text-center text-slate-500 border border-dashed border-slate-800 rounded-2xl space-y-1.5">
+                                  <p className="text-xs">لا توجد سجلات لهذه الماكينة في شيت الكاش.</p>
+                                  <p className="text-[10px] text-slate-600 font-sans">يرجى التأكد من اختيار العمود الصحيح للماكينة.</p>
+                                </div>
+                              ) : (
+                                <div className="space-y-4 max-h-[420px] overflow-y-auto pr-1">
+                                  {cashRows.map((row, rIdx) => {
+                                    const mappedAcc = row[colCashAcc || Object.keys(row)[0]] || 'غير متوفر';
+                                    const mappedRepName = row[colCashRep || Object.keys(row)[1]] || 'لا يوجد مندوب';
+                                    return (
+                                      <div
+                                        key={rIdx}
+                                        className="p-3.5 rounded-2xl bg-slate-950/40 border border-slate-800 hover:border-slate-700/80 transition-all space-y-3 text-right"
+                                      >
+                                        <div className="flex justify-between items-center text-[11px] border-b border-slate-800/60 pb-2">
+                                          <span className="font-bold text-slate-400">سجل #{rIdx + 1}</span>
+                                          <span className="font-mono text-indigo-400 font-black bg-indigo-500/10 px-2 py-0.5 rounded-md border border-indigo-500/20">
+                                            حساب: {mappedAcc}
+                                          </span>
+                                        </div>
+                                        <div className="text-xs">
+                                          <p className="font-bold text-slate-200">
+                                            اسم المسؤول: <span className="text-white font-black">{mappedRepName}</span>
+                                          </p>
+                                        </div>
+
+                                        {/* Grid of all other columns in that row */}
+                                        <div className="grid grid-cols-2 gap-2 text-[10px] pt-2 border-t border-slate-800/40 font-mono text-right">
+                                          {Object.entries(row).map(([key, val]) => {
+                                            if ([colM3, colCashAcc, colCashRep].includes(key)) return null;
+                                            return (
+                                              <div
+                                                key={key}
+                                                className="bg-[#0c1220]/50 p-2 rounded-xl border border-slate-800/40 truncate text-right"
+                                                title={`${key}: ${val}`}
+                                              >
+                                                <span className="text-slate-500 block text-[9px] mb-0.5 truncate">{key}</span>
+                                                <span className="text-slate-300 font-bold truncate block">{String(val ?? '-')}</span>
+                                              </div>
+                                            );
+                                          })}
+                                        </div>
+                                      </div>
+                                    );
+                                  })}
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })()}
+                  </div>
                 </div>
               ) : (
                 /* Table View */
@@ -3473,40 +4107,42 @@ export default function App() {
               )}
 
               {/* Pagination */}
-              <div className="flex items-center justify-between text-xs text-slate-500 pt-2">
-                <div>
-                  عرض{' '}
-                  <span className="font-bold text-slate-800 dark:text-white">
-                    {displayedSlice.length}
-                  </span>{' '}
-                  من{' '}
-                  <span className="font-bold text-slate-800 dark:text-white">
-                    {filteredRows.length}
-                  </span>{' '}
-                  سطر مفصل
+              {viewMode !== 'split' && (
+                <div className="flex items-center justify-between text-xs text-slate-500 pt-2">
+                  <div>
+                    عرض{' '}
+                    <span className="font-bold text-slate-800 dark:text-white">
+                      {displayedSlice.length}
+                    </span>{' '}
+                    من{' '}
+                    <span className="font-bold text-slate-800 dark:text-white">
+                      {filteredRows.length}
+                    </span>{' '}
+                    سطر مفصل
+                  </div>
+                  <div className="flex items-center gap-1 font-bold">
+                    <button
+                      disabled={currentPage <= 1}
+                      onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+                      className="p-1 px-2.5 rounded bg-slate-100 dark:bg-slate-800 disabled:opacity-40 flex items-center gap-1 cursor-pointer"
+                    >
+                      <ChevronRight className="w-3.5 h-3.5" />
+                      <span>السابق</span>
+                    </button>
+                    <span className="px-2">
+                      صفحة {currentPage} من {maxPages}
+                    </span>
+                    <button
+                      disabled={currentPage >= maxPages}
+                      onClick={() => setCurrentPage((p) => Math.min(maxPages, p + 1))}
+                      className="p-1 px-2.5 rounded bg-slate-100 dark:bg-slate-800 disabled:opacity-40 flex items-center gap-1 cursor-pointer"
+                    >
+                      <span>التالي</span>
+                      <ChevronLeft className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
                 </div>
-                <div className="flex items-center gap-1 font-bold">
-                  <button
-                    disabled={currentPage <= 1}
-                    onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
-                    className="p-1 px-2.5 rounded bg-slate-100 dark:bg-slate-800 disabled:opacity-40 flex items-center gap-1 cursor-pointer"
-                  >
-                    <ChevronRight className="w-3.5 h-3.5" />
-                    <span>السابق</span>
-                  </button>
-                  <span className="px-2">
-                    صفحة {currentPage} من {maxPages}
-                  </span>
-                  <button
-                    disabled={currentPage >= maxPages}
-                    onClick={() => setCurrentPage((p) => Math.min(maxPages, p + 1))}
-                    className="p-1 px-2.5 rounded bg-slate-100 dark:bg-slate-800 disabled:opacity-40 flex items-center gap-1 cursor-pointer"
-                  >
-                    <span>التالي</span>
-                    <ChevronLeft className="w-3.5 h-3.5" />
-                  </button>
-                </div>
-              </div>
+              )}
             </div>
           </div>
         )}

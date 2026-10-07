@@ -23,12 +23,31 @@ import { MachineSummary, ExpandedRow, SheetRow } from '../types';
 
 function normalizeMachineId(id: string | number | undefined | null): string {
   if (id === undefined || id === null) return '';
-  let clean = String(id).trim();
+  let clean = String(id).replace(/[\u200B-\u200D\uFEFF\u00A0]/g, '').trim();
+  // Convert Eastern Arabic digits (٠-٩) to Western digits (0-9)
+  clean = clean.replace(/[٠-٩]/g, (d) => String('٠١٢٣٤٥٦٧٨٩'.indexOf(d)));
   // Remove "7-" or "٧-" prefixes
   if (clean.startsWith('7-')) {
     clean = clean.substring(2).trim();
   } else if (clean.startsWith('٧-')) {
     clean = clean.substring(2).trim();
+  }
+  // Remove trailing .0 from float string representation (e.g. 1001.0 -> 1001)
+  if (clean.endsWith('.0')) {
+    clean = clean.substring(0, clean.length - 2);
+  }
+  return clean;
+}
+
+function normalizeText(text: string | number | undefined | null): string {
+  if (text === undefined || text === null) return '';
+  let clean = String(text)
+    .replace(/[\u200B-\u200D\uFEFF\u00A0]/g, '')
+    .trim()
+    .toLowerCase()
+    .replace(/[٠-٩]/g, (d) => String('٠١٢٣٤٥٦٧٨٩'.indexOf(d)));
+  if (clean.endsWith('.0')) {
+    clean = clean.substring(0, clean.length - 2);
   }
   return clean;
 }
@@ -105,15 +124,20 @@ export const RepLookupModal: React.FC<RepLookupModalProps> = ({
       const keys = Object.keys(sampleRow);
       const mCol = colM2 && sampleRow[colM2] !== undefined
         ? colM2
-        : keys.find((k) => /ماكينة|جهاز|pos|machine|sn|id/i.test(k)) || keys[0];
+        : keys.find((k) => /^(acceptor1|acceptor_1|acceptor 1|acceptor|ماكينة المدفوعات|ماكينه المدفوعات)$/i.test(k))
+          || keys.find((k) => /(acceptor.*1|^acceptor$|ماكين.*مدفوعات)/i.test(k))
+          || keys.find((k) => /ماكينة|جهاز|pos|machine|sn|id|acceptor/i.test(k)) || keys[0];
 
       const accCol = colAcc && sampleRow[colAcc] !== undefined
         ? colAcc
-        : keys.find((k) => /حساب|كود|رقم.*مندوب|account|acc|code/i.test(k)) || '';
+        : keys.find((k) => /^(doner1|donor1|doner_1|donor_1|doner 1|donor 1|doner|donor|رقم حساب المدفوعات|حساب المدفوعات)$/i.test(k))
+          || keys.find((k) => /(doner.*1|donor.*1|^doner$|^donor$|حساب.*مدفوعات|رقم.*المدفوعات)/i.test(k))
+          || keys.find((k) => /حساب|كود|رقم.*مندوب|account|acc|code|doner|donor/i.test(k)) || '';
 
       const repCol = colRep && sampleRow[colRep] !== undefined
         ? colRep
-        : keys.find((k) => /اسم.*مندوب|اسم.*العميل|اسم.*المستخدم|اسم|rep.*name|agent.*name|name/i.test(k)) || keys[1] || keys[0];
+        : keys.find((k) => /اسم.*مندوب|اسم.*العميل|اسم.*المستخدم|اسم|rep.*name|agent.*name|name/i.test(k))
+          || accCol || keys[1] || keys[0];
 
       sheet2.forEach((row) => {
         const rawM = row[mCol];
@@ -137,14 +161,30 @@ export const RepLookupModal: React.FC<RepLookupModalProps> = ({
         }
         machineToRepsMap.get(normalizedKey)!.push({ account: accVal, name: repName, type: 'payment' });
 
-        // Index by rep (preserve every instance)
+        // Index by rep (preserve every instance and unify across sheets)
         if (accVal !== 'غير متوفر' || (repName && repName !== 'لا يوجد مندوب')) {
-          const repKey = accVal !== 'غير متوفر' ? accVal.toLowerCase() : repName.toLowerCase();
+          const normAccKey = accVal !== 'غير متوفر' ? normalizeText(accVal) : '';
+          const normNameKey = repName ? normalizeText(repName) : '';
+          const repKey = normAccKey || normNameKey;
+
           if (!repToMachinesMap.has(repKey)) {
             repToMachinesMap.set(repKey, { account: accVal, name: repName, machines: [] });
           }
           const repInfo = repToMachinesMap.get(repKey)!;
+          if (accVal !== 'غير متوفر' && (repInfo.account === 'غير متوفر' || !repInfo.account)) {
+            repInfo.account = accVal;
+          }
+          if (repName && !repName.startsWith('مندوب (') && !repName.startsWith('مسؤول كاش (')) {
+            repInfo.name = repName;
+          }
           repInfo.machines.push({ machine: displayMachine, type: 'payment' });
+
+          // Also map secondary key if both account and name exist
+          if (normAccKey && normNameKey && normNameKey !== normAccKey) {
+            if (!repToMachinesMap.has(normNameKey)) {
+              repToMachinesMap.set(normNameKey, repInfo);
+            }
+          }
         }
       });
     }
@@ -155,15 +195,20 @@ export const RepLookupModal: React.FC<RepLookupModalProps> = ({
       const keys3 = Object.keys(sampleRow3);
       const mCol3 = colM3 && sampleRow3[colM3] !== undefined
         ? colM3
-        : keys3.find((k) => /ماكينة|جهاز|pos|machine|sn|id/i.test(k)) || keys3[0];
+        : keys3.find((k) => /^(acceptor2|acceptor_2|acceptor 2|رقم ماكينه الكاش|ماكينه الكاش|ماكينة الكاش)$/i.test(k))
+          || keys3.find((k) => /(acceptor.*2|ماكين.*كاش|ماكينة.*الكاش)/i.test(k))
+          || keys3.find((k) => /ماكينة|جهاز|pos|machine|sn|id|acceptor/i.test(k)) || keys3[0];
 
       const accCol3 = colCashAcc && sampleRow3[colCashAcc] !== undefined
         ? colCashAcc
-        : keys3.find((k) => /حساب|كود|رقم.*مندوب|account|acc|code/i.test(k)) || '';
+        : keys3.find((k) => /^(doner2|donor2|doner_2|donor_2|doner 2|donor 2|رقم الكاش المدفوعات|رقم الكاش|حساب الكاش)$/i.test(k))
+          || keys3.find((k) => /(doner.*2|donor.*2|كاش.*مدفوعات|رقم.*الكاش|حساب.*الكاش)/i.test(k))
+          || keys3.find((k) => /حساب|كود|رقم.*مندوب|account|acc|code|doner|donor/i.test(k)) || '';
 
       const repCol3 = colCashRep && sampleRow3[colCashRep] !== undefined
         ? colCashRep
-        : keys3.find((k) => /اسم.*مندوب|اسم.*العميل|اسم.*المستخدم|اسم|rep.*name|agent.*name|name/i.test(k)) || keys3[1] || keys3[0];
+        : keys3.find((k) => /اسم.*مندوب|اسم.*العميل|اسم.*المستخدم|اسم|rep.*name|agent.*name|name/i.test(k))
+          || accCol3 || keys3[1] || keys3[0];
 
       sheet3.forEach((row) => {
         const rawM = row[mCol3];
@@ -187,19 +232,36 @@ export const RepLookupModal: React.FC<RepLookupModalProps> = ({
         }
         machineToRepsMap.get(normalizedKey)!.push({ account: accVal, name: repName, type: 'cash' });
 
-        // Index by rep (preserve every instance)
+        // Index by rep (preserve every instance and unify with payments)
         if (accVal !== 'غير متوفر' || (repName && repName !== 'لا يوجد مسؤول كاش')) {
-          const repKey = accVal !== 'غير متوفر' ? accVal.toLowerCase() : repName.toLowerCase();
+          const normAccKey = accVal !== 'غير متوفر' ? normalizeText(accVal) : '';
+          const normNameKey = repName ? normalizeText(repName) : '';
+          const repKey = normAccKey || normNameKey;
+
           if (!repToMachinesMap.has(repKey)) {
             repToMachinesMap.set(repKey, { account: accVal, name: repName, machines: [] });
           }
           const repInfo = repToMachinesMap.get(repKey)!;
+          if (accVal !== 'غير متوفر' && (repInfo.account === 'غير متوفر' || !repInfo.account)) {
+            repInfo.account = accVal;
+          }
+          if (repName && !repName.startsWith('مسؤول كاش (') && !repName.startsWith('مندوب (')) {
+            repInfo.name = repName;
+          }
           repInfo.machines.push({ machine: displayMachine, type: 'cash' });
+
+          // Also map secondary key if both account and name exist
+          if (normAccKey && normNameKey && normNameKey !== normAccKey) {
+            if (!repToMachinesMap.has(normNameKey)) {
+              repToMachinesMap.set(normNameKey, repInfo);
+            }
+          }
         }
       });
     }
 
-    const repList = Array.from(repToMachinesMap.values()).map((r) => ({
+    const uniqueRepValues = Array.from(new Set(Array.from(repToMachinesMap.values())));
+    const repList = uniqueRepValues.map((r) => ({
       account: r.account,
       name: r.name,
       machineCount: r.machines.length,
@@ -301,154 +363,201 @@ export const RepLookupModal: React.FC<RepLookupModalProps> = ({
   }, [uniqueMachines]);
 
   // Representative Matched Data
-  // Representative Matched Data
   const matchedRepData = useMemo(() => {
     if (!searchQuery.trim() || activeTab !== 'rep') {
       return null;
     }
 
     const q = searchQuery.trim().toLowerCase();
+    const qNorm = q
+      .replace(/[\u200B-\u200D\uFEFF\u00A0]/g, '')
+      .replace(/[٠-٩]/g, (d) => String('٠١٢٣٤٥٦٧٨٩'.indexOf(d)));
 
-    // CASE 1: Using expandedRows + machinesResults
-    if (expandedRows && expandedRows.length > 0 && machinesResults && machinesResults.length > 0) {
-      const matchedRepRows = expandedRows.filter(
-        (r) =>
-          r.status !== 'none' &&
-          (r.account.toLowerCase().includes(q) || r.repName.toLowerCase().includes(q))
-      );
+    // Gather all matching reps from sheet2Index.repToMachinesMap
+    const matchedEntries: Array<{
+      account: string;
+      name: string;
+      machines: Array<{ machine: string; type: 'payment' | 'cash' }>;
+    }> = [];
 
-      if (matchedRepRows.length > 0) {
-        const primaryAccount = matchedRepRows[0].account;
-        const primaryName = matchedRepRows[0].repName;
+    const matchedRepKeys = new Set<string>();
 
-        const machinesList: Array<{
-          machine: string;
-          type: 'payment' | 'cash';
-          totalRepsOnMachine: number;
-          repAccount: string;
-          repName: string;
-          otherReps: Array<{ account: string; name: string; type?: 'payment' | 'cash' }>;
-          status: 'single' | 'multi' | 'none';
-        }> = [];
+    for (const [key, val] of sheet2Index.repToMachinesMap.entries()) {
+      const keyNorm = key
+        .replace(/[\u200B-\u200D\uFEFF\u00A0]/g, '')
+        .replace(/[٠-٩]/g, (d) => String('٠١٢٣٤٥٦٧٨٩'.indexOf(d)));
+      const accNorm = val.account
+        .toLowerCase()
+        .replace(/[\u200B-\u200D\uFEFF\u00A0]/g, '')
+        .replace(/[٠-٩]/g, (d) => String('٠١٢٣٤٥٦٧٨٩'.indexOf(d)));
+      const nameNorm = val.name
+        .toLowerCase()
+        .replace(/[\u200B-\u200D\uFEFF\u00A0]/g, '')
+        .replace(/[٠-٩]/g, (d) => String('٠١٢٣٤٥٦٧٨٩'.indexOf(d)));
 
-        matchedRepRows.forEach((row) => {
-          const rowNorm = normalizeMachineId(row.machine);
-          const m = machinesResults.find(
-            (mr) => mr.machine === row.machine || normalizeMachineId(mr.machine) === rowNorm
+      if (keyNorm.includes(qNorm) || accNorm.includes(qNorm) || nameNorm.includes(qNorm) || qNorm.includes(accNorm)) {
+        if (!matchedEntries.includes(val)) {
+          matchedEntries.push(val);
+        }
+        if (val.account && val.account !== 'غير متوفر') matchedRepKeys.add(val.account.toLowerCase());
+        if (val.name && val.name !== 'لا يوجد مندوب') matchedRepKeys.add(val.name.toLowerCase());
+      }
+    }
+
+    // Also check expandedRows
+    const matchedExpandedRows = (expandedRows || []).filter((r) => {
+      if (r.status === 'none') return false;
+      const accNorm = r.account
+        .toLowerCase()
+        .replace(/[\u200B-\u200D\uFEFF\u00A0]/g, '')
+        .replace(/[٠-٩]/g, (d) => String('٠١٢٣٤٥٦٧٨٩'.indexOf(d)));
+      const nameNorm = r.repName
+        .toLowerCase()
+        .replace(/[\u200B-\u200D\uFEFF\u00A0]/g, '')
+        .replace(/[٠-٩]/g, (d) => String('٠١٢٣٤٥٦٧٨٩'.indexOf(d)));
+
+      const isMatch =
+        accNorm.includes(qNorm) ||
+        nameNorm.includes(qNorm) ||
+        matchedRepKeys.has(r.account.toLowerCase()) ||
+        matchedRepKeys.has(r.repName.toLowerCase());
+
+      if (isMatch) {
+        if (r.account && r.account !== 'غير متوفر') matchedRepKeys.add(r.account.toLowerCase());
+        if (r.repName && r.repName !== 'لا يوجد مندوب') matchedRepKeys.add(r.repName.toLowerCase());
+      }
+      return isMatch;
+    });
+
+    if (matchedEntries.length === 0 && matchedExpandedRows.length === 0) {
+      return null;
+    }
+
+    // Determine primary rep name and account
+    const primaryAccount =
+      matchedEntries.find((e) => e.account && e.account !== 'غير متوفر')?.account ||
+      matchedExpandedRows.find((r) => r.account && r.account !== 'غير متوفر')?.account ||
+      searchQuery.trim();
+
+    const primaryName =
+      matchedEntries.find((e) => e.name && e.name !== 'لا يوجد مندوب' && e.name !== 'لا يوجد مسؤول كاش')?.name ||
+      matchedExpandedRows.find((r) => r.repName && r.repName !== 'لا يوجد مندوب')?.repName ||
+      `مندوب (${primaryAccount})`;
+
+    // Build the complete list of machines for this rep (Both Cash and Payments!)
+    const machinesList: Array<{
+      machine: string;
+      type: 'payment' | 'cash';
+      totalRepsOnMachine: number;
+      sameRepOccurrences: number;
+      repAccount: string;
+      repName: string;
+      otherReps: Array<{ account: string; name: string; type?: 'payment' | 'cash' }>;
+      status: 'single' | 'multi' | 'none';
+    }> = [];
+
+    const seenMachineKey = new Set<string>();
+
+    // 1. First add from matchedExpandedRows (reconciled records with Sheet 1)
+    matchedExpandedRows.forEach((row) => {
+      const cleanId = normalizeMachineId(row.machine);
+      const isCash = row.type === 'cash';
+      const displayMachine = isCash
+        ? (cleanId.startsWith('7-') || cleanId.startsWith('٧-') ? cleanId : `7-${cleanId}`)
+        : cleanId;
+      const dedupKey = `${displayMachine}__${row.type}__${row.id}`;
+
+      if (!seenMachineKey.has(dedupKey)) {
+        seenMachineKey.add(dedupKey);
+
+        const normKey = normalizeMachineId(row.machine);
+        const mSummary = (machinesResults || []).find((mr) => normalizeMachineId(mr.machine) === normKey);
+        const allRepsOnMachine = mSummary?.reps || sheet2Index.machineToRepsMap.get(normKey) || [];
+
+        const cleanCurrentAcc = normalizeText(row.account);
+        const sameRepOccurrences = allRepsOnMachine.filter(
+          (r) => (cleanCurrentAcc && cleanCurrentAcc !== 'غير متوفر' && normalizeText(r.account) === cleanCurrentAcc) ||
+                 (r.name && r.name === row.repName)
+        ).length;
+
+        const otherReps = allRepsOnMachine.filter(
+          (r) => (cleanCurrentAcc && cleanCurrentAcc !== 'غير متوفر' ? normalizeText(r.account) !== cleanCurrentAcc : r.name !== row.repName)
+        );
+
+        machinesList.push({
+          machine: displayMachine,
+          type: isCash ? 'cash' : 'payment',
+          totalRepsOnMachine: Math.max(row.totalRepsForMachine, allRepsOnMachine.length, 1),
+          sameRepOccurrences: Math.max(sameRepOccurrences, 1),
+          repAccount: row.account,
+          repName: row.repName,
+          otherReps,
+          status: row.status,
+        });
+      }
+    });
+
+    // 2. Also add any machines from matchedEntries (from Sheet 2 and Sheet 3) not already in machinesList
+    matchedEntries.forEach((entry) => {
+      entry.machines.forEach((mObj) => {
+        const cleanId = normalizeMachineId(mObj.machine);
+        const isCash = mObj.type === 'cash';
+        const displayMachine = isCash
+          ? (cleanId.startsWith('7-') || cleanId.startsWith('٧-') ? cleanId : `7-${cleanId}`)
+          : cleanId;
+
+        // Check if already included in machinesList
+        const alreadyIncluded = machinesList.some(
+          (m) => normalizeMachineId(m.machine) === cleanId && m.type === mObj.type
+        );
+
+        if (!alreadyIncluded) {
+          const normKey = normalizeMachineId(mObj.machine);
+          const allRepsOnMachine = sheet2Index.machineToRepsMap.get(normKey) || [
+            { account: entry.account, name: entry.name, type: mObj.type }
+          ];
+
+          const cleanCurrentAcc = normalizeText(entry.account);
+          const sameRepOccurrences = allRepsOnMachine.filter(
+            (r) => (cleanCurrentAcc && cleanCurrentAcc !== 'غير متوفر' && normalizeText(r.account) === cleanCurrentAcc) ||
+                   (r.name && r.name === entry.name)
+          ).length;
+
+          const otherReps = allRepsOnMachine.filter(
+            (r) => (cleanCurrentAcc && cleanCurrentAcc !== 'غير متوفر' ? normalizeText(r.account) !== cleanCurrentAcc : r.name !== entry.name)
           );
 
-          let otherReps: Array<{ account: string; name: string; type?: 'payment' | 'cash' }> = [];
-          let totalRepsOnMachine = 1;
-          let status: 'single' | 'multi' | 'none' = 'single';
-
-          if (m) {
-            const currentIdx = m.reps.findIndex((r) => r.account === row.account && r.name === row.repName);
-            otherReps = m.reps.filter((_, rIdx) => rIdx !== currentIdx);
-            totalRepsOnMachine = m.repCount;
-            status = m.status;
-          }
-
-          const isPaymentRep = row.type === 'payment';
-          const cleanId = normalizeMachineId(row.machine);
-          const repMachineId = isPaymentRep
-            ? cleanId
-            : (cleanId.startsWith('7-') || cleanId.startsWith('٧-') ? cleanId : `7-${cleanId}`);
-
           machinesList.push({
-            machine: repMachineId,
-            type: isPaymentRep ? 'payment' : 'cash',
-            totalRepsOnMachine,
-            repAccount: row.account,
-            repName: row.repName,
+            machine: displayMachine,
+            type: isCash ? 'cash' : 'payment',
+            totalRepsOnMachine: Math.max(allRepsOnMachine.length, 1),
+            sameRepOccurrences: Math.max(sameRepOccurrences, 1),
+            repAccount: entry.account,
+            repName: entry.name,
             otherReps,
-            status,
+            status: allRepsOnMachine.length > 1 ? 'multi' : 'single',
           });
-        });
-
-        const cashCount = machinesList.filter((m) => m.type === 'cash').length;
-        const paymentsCount = machinesList.filter((m) => m.type === 'payment').length;
-        const soleCount = machinesList.filter((m) => m.totalRepsOnMachine === 1).length;
-        const sharedCount = machinesList.filter((m) => m.totalRepsOnMachine > 1).length;
-
-        return {
-          repInfo: {
-            account: primaryAccount,
-            name: primaryName,
-            totalMachines: machinesList.length,
-            cashCount,
-            paymentsCount,
-            soleCount,
-            sharedCount,
-          },
-          machines: machinesList,
-        };
-      }
-    }
-
-    // CASE 2: Using sheet2/sheet3 direct index
-    if (sheet2Index.repToMachinesMap.size > 0) {
-      let matchedEntry: { account: string; name: string; machines: Array<{ machine: string; type: 'payment' | 'cash' }> } | null = null;
-
-      for (const [key, val] of sheet2Index.repToMachinesMap.entries()) {
-        if (key.includes(q) || val.account.toLowerCase().includes(q) || val.name.toLowerCase().includes(q)) {
-          matchedEntry = val;
-          break;
         }
-      }
+      });
+    });
 
-      if (matchedEntry) {
-        const primaryAccount = matchedEntry.account;
-        const primaryName = matchedEntry.name;
-        const machineEntries = matchedEntry.machines;
+    const cashCount = machinesList.filter((m) => m.type === 'cash').length;
+    const paymentsCount = machinesList.filter((m) => m.type === 'payment').length;
+    const soleCount = machinesList.filter((m) => m.totalRepsOnMachine === 1).length;
+    const sharedCount = machinesList.filter((m) => m.totalRepsOnMachine > 1).length;
 
-        const machinesList = machineEntries.map((mObj) => {
-          const mId = mObj.machine;
-          const normKey = normalizeMachineId(mId);
-          const allRepsOnThisMachine = sheet2Index.machineToRepsMap.get(normKey) || [{ account: primaryAccount, name: primaryName, type: mObj.type }];
-          const totalRepsOnMachine = allRepsOnThisMachine.length;
-
-          // Exclude only the current instance
-          const currentIdx = allRepsOnThisMachine.findIndex((r) => r.account === primaryAccount && r.name === primaryName);
-          const otherReps = allRepsOnThisMachine.filter((_, rIdx) => rIdx !== currentIdx);
-
-          const isCash = mObj.type === 'cash';
-          const cleanId = normalizeMachineId(mId);
-          const repMachineId = isCash
-            ? (cleanId.startsWith('7-') || cleanId.startsWith('٧-') ? cleanId : `7-${cleanId}`)
-            : cleanId;
-
-          return {
-            machine: repMachineId,
-            type: isCash ? ('cash' as const) : ('payment' as const),
-            totalRepsOnMachine,
-            repAccount: primaryAccount,
-            repName: primaryName,
-            otherReps,
-            status: (totalRepsOnMachine > 1 ? 'multi' : 'single') as 'single' | 'multi' | 'none',
-          };
-        });
-
-        const cashCount = machinesList.filter((m) => m.type === 'cash').length;
-        const paymentsCount = machinesList.filter((m) => m.type === 'payment').length;
-        const soleCount = machinesList.filter((m) => m.totalRepsOnMachine === 1).length;
-        const sharedCount = machinesList.filter((m) => m.totalRepsOnMachine > 1).length;
-
-        return {
-          repInfo: {
-            account: primaryAccount,
-            name: primaryName,
-            totalMachines: machinesList.length,
-            cashCount,
-            paymentsCount,
-            soleCount,
-            sharedCount,
-          },
-          machines: machinesList,
-        };
-      }
-    }
-
-    return null;
+    return {
+      repInfo: {
+        account: primaryAccount,
+        name: primaryName,
+        totalMachines: machinesList.length,
+        cashCount,
+        paymentsCount,
+        soleCount,
+        sharedCount,
+      },
+      machines: machinesList,
+    };
   }, [searchQuery, activeTab, expandedRows, machinesResults, sheet2Index]);
 
   // Machine Matched Data (الاستعلام عن ماكينة معينة)
@@ -991,15 +1100,22 @@ export const RepLookupModal: React.FC<RepLookupModalProps> = ({
                                 )}
                               </td>
                               <td className="p-3 text-center">
-                                <span
-                                  className={`inline-block px-2 py-0.5 rounded-lg text-[10px] font-black border ${
-                                    m.totalRepsOnMachine === 1
-                                      ? 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30'
-                                      : 'bg-amber-500/15 text-amber-400 border-amber-500/30'
-                                  }`}
-                                >
-                                  {m.totalRepsOnMachine === 1 ? 'خاصة بالمندوب' : `مشتركة (${m.totalRepsOnMachine} مناديب)`}
-                                </span>
+                                <div className="flex flex-col items-center gap-1">
+                                  <span
+                                    className={`inline-block px-2 py-0.5 rounded-lg text-[10px] font-black border ${
+                                      m.totalRepsOnMachine === 1
+                                        ? 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30'
+                                        : 'bg-amber-500/15 text-amber-400 border-amber-500/30'
+                                    }`}
+                                  >
+                                    {m.totalRepsOnMachine === 1 ? 'خاصة بالمندوب' : `مشتركة (${m.totalRepsOnMachine} مناديب)`}
+                                  </span>
+                                  {m.sameRepOccurrences > 1 && (
+                                    <span className="inline-block px-1.5 py-0.5 rounded-md text-[9px] font-black bg-purple-500/15 text-purple-400 border border-purple-500/30">
+                                      🔁 مكرر للمندوب ({m.sameRepOccurrences} مرات)
+                                    </span>
+                                  )}
+                                </div>
                               </td>
                               <td className="p-3 font-sans">
                                 {m.otherReps.length > 0 ? (
@@ -1015,6 +1131,10 @@ export const RepLookupModal: React.FC<RepLookupModalProps> = ({
                                       </span>
                                     ))}
                                   </div>
+                                ) : m.sameRepOccurrences > 1 ? (
+                                  <span className="text-purple-400 text-[11px] font-bold">
+                                    الماكينة مسندة لنفس المندوب ({m.sameRepOccurrences}) مرات متكررة بدون شركاء آخرين
+                                  </span>
                                 ) : (
                                   <span className="text-slate-500 text-[11px]">المندوب هو المالك الوحيد ولا يوجد شركاء</span>
                                 )}
@@ -1050,15 +1170,22 @@ export const RepLookupModal: React.FC<RepLookupModalProps> = ({
                                 <span className="text-slate-500 font-mono text-[11px] font-bold">#{idx + 1}</span>
                                 <span className="font-mono font-black text-white text-sm tracking-wide">{m.machine}</span>
                               </div>
-                              <span
-                                className={`px-2 py-0.5 rounded-lg text-[10px] font-black border ${
-                                  m.totalRepsOnMachine === 1
-                                    ? 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30'
-                                    : 'bg-amber-500/15 text-amber-400 border-amber-500/30'
-                                }`}
-                              >
-                                {m.totalRepsOnMachine === 1 ? 'خاصة بالمندوب' : 'مشتركة'}
-                              </span>
+                              <div className="flex flex-col items-end gap-1">
+                                <span
+                                  className={`px-2 py-0.5 rounded-lg text-[10px] font-black border ${
+                                    m.totalRepsOnMachine === 1
+                                      ? 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30'
+                                      : 'bg-amber-500/15 text-amber-400 border-amber-500/30'
+                                  }`}
+                                >
+                                  {m.totalRepsOnMachine === 1 ? 'خاصة بالمندوب' : `مشتركة (${m.totalRepsOnMachine} مناديب)`}
+                                </span>
+                                {m.sameRepOccurrences > 1 && (
+                                  <span className="px-1.5 py-0.5 rounded-md text-[9px] font-black bg-purple-500/15 text-purple-400 border border-purple-500/30">
+                                    🔁 مكرر ({m.sameRepOccurrences} مرات)
+                                  </span>
+                                )}
+                              </div>
                             </div>
 
                             {/* Card Content - Partners */}
@@ -1079,6 +1206,10 @@ export const RepLookupModal: React.FC<RepLookupModalProps> = ({
                                     </span>
                                   ))}
                                 </div>
+                              ) : m.sameRepOccurrences > 1 ? (
+                                <span className="text-purple-400 text-[11px] font-bold">
+                                  مسندة لنفس المندوب ({m.sameRepOccurrences}) مرات متكررة
+                                </span>
                               ) : (
                                 <span className="text-slate-500 text-[11px]">المندوب هو المالك الوحيد ولا يوجد شركاء</span>
                               )}
