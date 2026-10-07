@@ -39,18 +39,24 @@ export const ProgressModal: React.FC<ProgressModalProps> = ({
 
         {/* 1. TOP HEADER SECTION */}
         <div className="flex items-start justify-between gap-4 mb-4">
-          {/* Top Left in RTL: Percentage Capsule Badge + Close Button */}
+          {/* Top Left in RTL: Percentage Capsule Badge + Prominent Close Button */}
           <div className="order-2 sm:order-1 shrink-0 flex items-center gap-2">
             <span className="px-3.5 py-1 rounded-full text-xs font-mono font-black bg-[#0d1c3a] text-blue-400 border border-blue-500/40 shadow-inner inline-block">
               {roundedPercent}%
             </span>
             {onClose && (
               <button
-                onClick={onClose}
-                className="w-8 h-8 rounded-xl bg-slate-800/80 hover:bg-slate-700 text-slate-400 hover:text-white flex items-center justify-center transition border border-slate-700/60 shrink-0 cursor-pointer shadow-sm"
-                title="إغلاق النافذة"
+                type="button"
+                onClick={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  onClose();
+                }}
+                className="px-3 py-1.5 rounded-xl bg-rose-500/20 hover:bg-rose-600 text-rose-300 hover:text-white flex items-center gap-1.5 transition-all border border-rose-500/40 shrink-0 cursor-pointer shadow-md active:scale-95 text-xs font-bold"
+                title="إغلاق النافذة فوراً"
               >
-                <X className="w-4 h-4" />
+                <X className="w-3.5 h-3.5 text-rose-300 group-hover:text-white" />
+                <span>إغلاق ✕</span>
               </button>
             )}
           </div>

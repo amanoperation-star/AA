@@ -88,7 +88,7 @@ export const RepLookupModal: React.FC<RepLookupModalProps> = ({
   // Index Sheets directly (supports fast lookup even before full matching)
   const sheet2Index = useMemo(() => {
     const machineToRepsMap = new Map<string, Array<{ account: string; name: string; type: 'payment' | 'cash' }>>();
-    const repToMachinesMap = new Map<string, { account: string; name: string; machines: string[]; type: 'payment' | 'cash' }>();
+    const repToMachinesMap = new Map<string, { account: string; name: string; machines: Array<{ machine: string; type: 'payment' | 'cash' }> }>();
 
     if ((!sheet2 || sheet2.length === 0) && (!sheet3 || sheet3.length === 0)) {
       return {
@@ -120,7 +120,7 @@ export const RepLookupModal: React.FC<RepLookupModalProps> = ({
         if (rawM === undefined || rawM === null || String(rawM).trim() === '') return;
         const rawMStr = String(rawM).trim();
         const normalizedKey = normalizeMachineId(rawMStr);
-        const displayMachine = rawMStr;
+        const displayMachine = normalizedKey; // Payments machines are strictly clean without 7-
 
         const rawRep = row[repCol];
         const rawAcc = accCol && row[accCol] !== undefined ? String(row[accCol]).trim() : '';
@@ -137,16 +137,14 @@ export const RepLookupModal: React.FC<RepLookupModalProps> = ({
         }
         machineToRepsMap.get(normalizedKey)!.push({ account: accVal, name: repName, type: 'payment' });
 
-        // Index by rep
+        // Index by rep (preserve every instance)
         if (accVal !== 'غير متوفر' || (repName && repName !== 'لا يوجد مندوب')) {
           const repKey = accVal !== 'غير متوفر' ? accVal.toLowerCase() : repName.toLowerCase();
           if (!repToMachinesMap.has(repKey)) {
-            repToMachinesMap.set(repKey, { account: accVal, name: repName, machines: [], type: 'payment' });
+            repToMachinesMap.set(repKey, { account: accVal, name: repName, machines: [] });
           }
           const repInfo = repToMachinesMap.get(repKey)!;
-          if (!repInfo.machines.includes(displayMachine)) {
-            repInfo.machines.push(displayMachine);
-          }
+          repInfo.machines.push({ machine: displayMachine, type: 'payment' });
         }
       });
     }
@@ -172,7 +170,7 @@ export const RepLookupModal: React.FC<RepLookupModalProps> = ({
         if (rawM === undefined || rawM === null || String(rawM).trim() === '') return;
         const rawMStr = String(rawM).trim();
         const normalizedKey = normalizeMachineId(rawMStr);
-        const displayMachine = rawMStr.startsWith('7-') || rawMStr.startsWith('٧-') ? rawMStr : `7-${rawMStr}`;
+        const displayMachine = rawMStr.startsWith('7-') || rawMStr.startsWith('٧-') ? rawMStr : `7-${normalizedKey}`;
 
         const rawRep = row[repCol3];
         const rawAcc = accCol3 && row[accCol3] !== undefined ? String(row[accCol3]).trim() : '';
@@ -189,16 +187,14 @@ export const RepLookupModal: React.FC<RepLookupModalProps> = ({
         }
         machineToRepsMap.get(normalizedKey)!.push({ account: accVal, name: repName, type: 'cash' });
 
-        // Index by rep
+        // Index by rep (preserve every instance)
         if (accVal !== 'غير متوفر' || (repName && repName !== 'لا يوجد مسؤول كاش')) {
           const repKey = accVal !== 'غير متوفر' ? accVal.toLowerCase() : repName.toLowerCase();
           if (!repToMachinesMap.has(repKey)) {
-            repToMachinesMap.set(repKey, { account: accVal, name: repName, machines: [], type: 'cash' });
+            repToMachinesMap.set(repKey, { account: accVal, name: repName, machines: [] });
           }
           const repInfo = repToMachinesMap.get(repKey)!;
-          if (!repInfo.machines.includes(displayMachine)) {
-            repInfo.machines.push(displayMachine);
-          }
+          repInfo.machines.push({ machine: displayMachine, type: 'cash' });
         }
       });
     }
@@ -207,14 +203,15 @@ export const RepLookupModal: React.FC<RepLookupModalProps> = ({
       account: r.account,
       name: r.name,
       machineCount: r.machines.length,
-      type: r.type,
+      type: r.machines.some((m) => m.type === 'cash') ? ('cash' as const) : ('payment' as const),
     })).sort((a, b) => b.machineCount - a.machineCount);
 
     const machineList = Array.from(machineToRepsMap.entries()).map(([mKey, reps]) => {
-      const isCash = reps.some(r => r.type === 'cash');
-      const displayMachine = isCash 
-        ? (mKey.startsWith('7-') || mKey.startsWith('٧-') ? mKey : `7-${mKey}`)
-        : mKey;
+      const norm = normalizeMachineId(mKey);
+      const isPureCash = reps.length > 0 && reps.every(r => r.type === 'cash');
+      const displayMachine = isPureCash 
+        ? (norm.startsWith('7-') || norm.startsWith('٧-') ? norm : `7-${norm}`)
+        : norm;
       return {
         machine: displayMachine,
         repCount: reps.length,
@@ -335,22 +332,37 @@ export const RepLookupModal: React.FC<RepLookupModalProps> = ({
         }> = [];
 
         matchedRepRows.forEach((row) => {
-          const m = machinesResults.find((mr) => mr.machine === row.machine);
-          if (m) {
-            // Find the index of current row to exclude only this specific assignment instance
-            const currentIdx = m.reps.findIndex((r) => r.account === row.account && r.name === row.repName);
-            const otherReps = m.reps.filter((_, rIdx) => rIdx !== currentIdx);
+          const rowNorm = normalizeMachineId(row.machine);
+          const m = machinesResults.find(
+            (mr) => mr.machine === row.machine || normalizeMachineId(mr.machine) === rowNorm
+          );
 
-            machinesList.push({
-              machine: row.machine,
-              type: row.type || (row.machine.startsWith('7-') || row.machine.startsWith('٧-') ? 'cash' : 'payment'),
-              totalRepsOnMachine: m.repCount,
-              repAccount: row.account,
-              repName: row.repName,
-              otherReps,
-              status: m.status,
-            });
+          let otherReps: Array<{ account: string; name: string; type?: 'payment' | 'cash' }> = [];
+          let totalRepsOnMachine = 1;
+          let status: 'single' | 'multi' | 'none' = 'single';
+
+          if (m) {
+            const currentIdx = m.reps.findIndex((r) => r.account === row.account && r.name === row.repName);
+            otherReps = m.reps.filter((_, rIdx) => rIdx !== currentIdx);
+            totalRepsOnMachine = m.repCount;
+            status = m.status;
           }
+
+          const isPaymentRep = row.type === 'payment';
+          const cleanId = normalizeMachineId(row.machine);
+          const repMachineId = isPaymentRep
+            ? cleanId
+            : (cleanId.startsWith('7-') || cleanId.startsWith('٧-') ? cleanId : `7-${cleanId}`);
+
+          machinesList.push({
+            machine: repMachineId,
+            type: isPaymentRep ? 'payment' : 'cash',
+            totalRepsOnMachine,
+            repAccount: row.account,
+            repName: row.repName,
+            otherReps,
+            status,
+          });
         });
 
         const cashCount = machinesList.filter((m) => m.type === 'cash').length;
@@ -373,9 +385,9 @@ export const RepLookupModal: React.FC<RepLookupModalProps> = ({
       }
     }
 
-    // CASE 2: Using sheet2 direct index
+    // CASE 2: Using sheet2/sheet3 direct index
     if (sheet2Index.repToMachinesMap.size > 0) {
-      let matchedEntry: { account: string; name: string; machines: string[]; type: 'payment' | 'cash' } | null = null;
+      let matchedEntry: { account: string; name: string; machines: Array<{ machine: string; type: 'payment' | 'cash' }> } | null = null;
 
       for (const [key, val] of sheet2Index.repToMachinesMap.entries()) {
         if (key.includes(q) || val.account.toLowerCase().includes(q) || val.name.toLowerCase().includes(q)) {
@@ -387,20 +399,26 @@ export const RepLookupModal: React.FC<RepLookupModalProps> = ({
       if (matchedEntry) {
         const primaryAccount = matchedEntry.account;
         const primaryName = matchedEntry.name;
-        const machineIds = matchedEntry.machines;
+        const machineEntries = matchedEntry.machines;
 
-        const machinesList = machineIds.map((mId) => {
-          const allRepsOnThisMachine = sheet2Index.machineToRepsMap.get(mId) || [{ account: primaryAccount, name: primaryName, type: matchedEntry?.type || 'payment' }];
+        const machinesList = machineEntries.map((mObj) => {
+          const mId = mObj.machine;
+          const normKey = normalizeMachineId(mId);
+          const allRepsOnThisMachine = sheet2Index.machineToRepsMap.get(normKey) || [{ account: primaryAccount, name: primaryName, type: mObj.type }];
           const totalRepsOnMachine = allRepsOnThisMachine.length;
 
           // Exclude only the current instance
           const currentIdx = allRepsOnThisMachine.findIndex((r) => r.account === primaryAccount && r.name === primaryName);
           const otherReps = allRepsOnThisMachine.filter((_, rIdx) => rIdx !== currentIdx);
 
-          const isCash = mId.startsWith('7-') || mId.startsWith('٧-') || matchedEntry?.type === 'cash';
+          const isCash = mObj.type === 'cash';
+          const cleanId = normalizeMachineId(mId);
+          const repMachineId = isCash
+            ? (cleanId.startsWith('7-') || cleanId.startsWith('٧-') ? cleanId : `7-${cleanId}`)
+            : cleanId;
 
           return {
-            machine: mId,
+            machine: repMachineId,
             type: isCash ? ('cash' as const) : ('payment' as const),
             totalRepsOnMachine,
             repAccount: primaryAccount,
@@ -443,10 +461,16 @@ export const RepLookupModal: React.FC<RepLookupModalProps> = ({
 
     // CASE 1: Using machinesResults
     if (machinesResults && machinesResults.length > 0) {
-      const found = machinesResults.find((m) => m.machine.toLowerCase().includes(q));
+      const qNorm = normalizeMachineId(q);
+      const found = machinesResults.find(
+        (m) => m.machine.toLowerCase().includes(q) || normalizeMachineId(m.machine).toLowerCase().includes(qNorm)
+      );
       if (found) {
+        const clean = normalizeMachineId(found.machine);
+        const isPureCash = found.reps.length > 0 && found.reps.every((r) => r.type === 'cash');
+        const displayMachine = isPureCash ? (clean.startsWith('7-') ? clean : `7-${clean}`) : clean;
         return {
-          machine: found.machine,
+          machine: displayMachine,
           repCount: found.repCount,
           status: found.status,
           reps: found.reps,
@@ -456,10 +480,14 @@ export const RepLookupModal: React.FC<RepLookupModalProps> = ({
 
     // CASE 2: Using sheet2 index / sheet1
     if (sheet2Index.machineToRepsMap.size > 0 || sheet1.length > 0) {
+      const qNorm = normalizeMachineId(q);
       for (const [mId, reps] of sheet2Index.machineToRepsMap.entries()) {
-        if (mId.toLowerCase().includes(q)) {
+        const norm = normalizeMachineId(mId);
+        if (mId.toLowerCase().includes(q) || norm.toLowerCase().includes(qNorm)) {
+          const isPureCash = reps.length > 0 && reps.every((r) => r.type === 'cash');
+          const displayMachine = isPureCash ? (norm.startsWith('7-') ? norm : `7-${norm}`) : norm;
           return {
-            machine: mId,
+            machine: displayMachine,
             repCount: reps.length,
             status: reps.length === 1 ? 'single' : reps.length > 1 ? 'multi' : 'none',
             reps: reps.map((r) => ({ account: r.account, name: r.name, type: r.type })),

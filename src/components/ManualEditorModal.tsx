@@ -252,6 +252,7 @@ export const ManualEditorModal: React.FC<ManualEditorModalProps> = ({
           return {
             'رقم الماكينة': cleanStr,
             'الفرع / المنطقة': r.c2?.trim() || '',
+            _tabType: 'cash',
           };
         });
 
@@ -260,6 +261,7 @@ export const ManualEditorModal: React.FC<ManualEditorModalProps> = ({
         .map((r) => ({
           'رقم الماكينة': r.c1.trim(),
           'الفرع / المنطقة': r.c2?.trim() || '',
+          _tabType: 'payments',
         }));
 
       const combined = [...validCash, ...validPay];

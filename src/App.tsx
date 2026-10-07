@@ -677,6 +677,61 @@ export default function App() {
     }
   };
 
+  // Instant Sheet Clear Handlers
+  const handleClearSheet1 = () => {
+    setProgressState((p) => ({ ...p, isOpen: false }));
+    setIsSheet1Loading(false);
+    setSheet1([]);
+    setSheet1FileName('');
+    if (sheet2.length === 0 && sheet3.length === 0) {
+      setMachinesResults([]);
+      setExpandedRows([]);
+      setDuplicates([]);
+      setIrregulars([]);
+    } else {
+      setTimeout(() => {
+        executeReconciliation([], sheet2, sheet3, colM1, colM2, colAcc, colRep, colM3, colCashAcc, colCashRep, emptyRepFallback);
+      }, 10);
+    }
+    showToast('🗑️ تم حذف وإغلاق شيت الماكينات المرفوع بنجاح');
+  };
+
+  const handleClearSheet2 = () => {
+    setProgressState((p) => ({ ...p, isOpen: false }));
+    setIsSheet2Loading(false);
+    setSheet2([]);
+    setSheet2FileName('');
+    if (sheet1.length === 0 && sheet3.length === 0) {
+      setMachinesResults([]);
+      setExpandedRows([]);
+      setDuplicates([]);
+      setIrregulars([]);
+    } else {
+      setTimeout(() => {
+        executeReconciliation(sheet1, [], sheet3, colM1, colM2, colAcc, colRep, colM3, colCashAcc, colCashRep, emptyRepFallback);
+      }, 10);
+    }
+    showToast('🗑️ تم حذف وإغلاق شيت المدفوعات المرفوع بنجاح');
+  };
+
+  const handleClearSheet3 = () => {
+    setProgressState((p) => ({ ...p, isOpen: false }));
+    setIsSheet3Loading(false);
+    setSheet3([]);
+    setSheet3FileName('');
+    if (sheet1.length === 0 && sheet2.length === 0) {
+      setMachinesResults([]);
+      setExpandedRows([]);
+      setDuplicates([]);
+      setIrregulars([]);
+    } else {
+      setTimeout(() => {
+        executeReconciliation(sheet1, sheet2, [], colM1, colM2, colAcc, colRep, colM3, colCashAcc, colCashRep, emptyRepFallback);
+      }, 10);
+    }
+    showToast('🗑️ تم حذف وإغلاق شيت الكاش المرفوع بنجاح');
+  };
+
   // Instant Sample Demo - Instant, smooth animation!
   const handleLoadSample = () => {
     setProgressState({
@@ -790,7 +845,7 @@ export default function App() {
     showToast('📥 تم تصدير ملف الإكسل المفصل بنجاح!');
   };
 
-  // Automatically prepend "7-" to all machine numbers in Cash sheet (Sheet 3) and/or Machines sheet (Sheet 1)
+  // Automatically prepend "7-" to all machine numbers in Cash sheet (Sheet 3) and ONLY pure cash machines in Sheet 1
   const handleApplyCashPrefix = () => {
     if (!sheet1.length && !sheet3.length) {
       showToast('⚠️ يرجى رفع شيت الماكينات أو شيت الكاش أولاً لتطبيق البادئة.');
@@ -808,11 +863,12 @@ export default function App() {
           const val = row[mCol3];
           if (val !== undefined && val !== null && val !== '') {
             const str = String(val).trim();
+            const norm = normalizeMachineId(str);
             if (!str.startsWith('7-') && !str.startsWith('٧-')) {
               modifiedCount++;
               return {
                 ...row,
-                [mCol3]: `7-${str}`,
+                [mCol3]: `7-${norm}`,
               };
             }
           }
@@ -822,7 +878,7 @@ export default function App() {
       }
     }
 
-    // 2. Update Sheet 1 (Machines Sheet)
+    // 2. Update Sheet 1 (Machines Sheet) - STRICTLY PROTECT PAYMENT MACHINES
     let updatedSheet1 = sheet1;
     if (sheet1.length > 0) {
       const mCol1 = colM1 || Object.keys(sheet1[0])[0];
@@ -831,24 +887,65 @@ export default function App() {
           ? new Set(updatedSheet3.map((r) => normalizeMachineId(String(r[colM3 || Object.keys(r)[0]]))))
           : null;
 
+        const paymentMachines = sheet2.length > 0
+          ? new Set(sheet2.map((r) => normalizeMachineId(String(r[colM2 || Object.keys(r)[0]]))))
+          : null;
+
         updatedSheet1 = sheet1.map((row) => {
           const val = row[mCol1];
           if (val !== undefined && val !== null && val !== '') {
             const str = String(val).trim();
-            if (!str.startsWith('7-') && !str.startsWith('٧-')) {
-              // Convert ONLY cash machines; NEVER convert payment machines
-              const isExplicitCash = row._tabType === 'cash';
-              const isExplicitPayment = row._tabType === 'payments';
-              const matchesSheet3 = cashMachines ? cashMachines.has(normalizeMachineId(str)) : false;
+            const norm = normalizeMachineId(str);
 
-              if (isExplicitCash || matchesSheet3 || (!cashMachines && !isExplicitPayment && row._tabType !== 'payments')) {
+            // A. PAYMENTS TAB (_tabType === 'payments'):
+            // MUST STAY EXACTLY AS IS WITHOUT 7- PREFIX!
+            if (row._tabType === 'payments') {
+              return {
+                ...row,
+                [mCol1]: norm, // keep clean without 7- prefix
+                _tabType: 'payments',
+              };
+            }
+
+            // B. CASH TAB (_tabType === 'cash'):
+            // ALL MACHINES IN THIS TAB CONVERT TO 7- AND THE NUMBER!
+            if (row._tabType === 'cash') {
+              if (!str.startsWith('7-') && !str.startsWith('٧-')) {
                 modifiedCount++;
                 return {
                   ...row,
-                  [mCol1]: `7-${str}`,
+                  [mCol1]: `7-${norm}`,
+                  _tabType: 'cash',
                 };
               }
+              return row;
             }
+
+            // C. Fallback for unclassified rows (single sheet uploaded without tabs):
+            const matchesSheet3 = cashMachines ? cashMachines.has(norm) : false;
+            const matchesSheet2 = paymentMachines ? paymentMachines.has(norm) : false;
+
+            if (str.startsWith('7-') || str.startsWith('٧-') || (matchesSheet3 && !matchesSheet2)) {
+              if (!str.startsWith('7-') && !str.startsWith('٧-')) {
+                modifiedCount++;
+                return {
+                  ...row,
+                  [mCol1]: `7-${norm}`,
+                  _tabType: 'cash',
+                };
+              }
+              return {
+                ...row,
+                _tabType: 'cash',
+              };
+            }
+
+            // Otherwise, keep as payments:
+            return {
+              ...row,
+              [mCol1]: norm,
+              _tabType: 'payments',
+            };
           }
           return row;
         });
@@ -857,9 +954,9 @@ export default function App() {
     }
 
     if (modifiedCount > 0) {
-      showToast(`✅ تم تحويل الماكينات وإضافة البادئة 7- بنجاح! (تم تعديل ${modifiedCount} ماكينة)`);
+      showToast(`⚡ تم تحويل كافة ماكينات تبويب الكاش إلى البادئة 7- بنجاح! (تم تعديل ${modifiedCount} ماكينة وبقاء تبويب المدفوعات كما هو بدون تغيير)`);
     } else {
-      showToast(`✅ كافة ماكينات الكاش تحتوي بالفعل على البادئة 7-`);
+      showToast(`✅ كافة ماكينات تبويب الكاش تحتوي بالفعل على البادئة 7- وتبويب المدفوعات ظل كما هو دون تغيير`);
     }
 
     // Auto run reconciliation if sheets are ready
@@ -1372,12 +1469,8 @@ export default function App() {
                   <div className="flex items-center gap-2 w-full sm:w-auto justify-end">
                     {sheet1.length > 0 && (
                       <button
-                        onClick={() => {
-                          setSheet1([]);
-                          setSheet1FileName('');
-                          showToast('🗑️ تم حذف وإغلاق شيت الماكينات المرفوع بنجاح');
-                        }}
-                        className="px-3 py-1.5 rounded-lg text-xs font-bold text-rose-400 hover:text-white bg-rose-500/15 hover:bg-rose-600 border border-rose-500/30 transition-all cursor-pointer flex items-center gap-1.5 shadow-sm"
+                        onClick={handleClearSheet1}
+                        className="px-3 py-1.5 rounded-lg text-xs font-bold text-rose-400 hover:text-white bg-rose-500/15 hover:bg-rose-600 border border-rose-500/30 transition-all cursor-pointer flex items-center gap-1.5 shadow-sm active:scale-95"
                         title="إغلاق وحذف هذا الشيت في حالة رفعه بطريق الخطأ"
                       >
                         <X className="w-3.5 h-3.5" />
@@ -1432,12 +1525,8 @@ export default function App() {
                   <div className="flex items-center gap-2 w-full sm:w-auto justify-end">
                     {sheet2.length > 0 && (
                       <button
-                        onClick={() => {
-                          setSheet2([]);
-                          setSheet2FileName('');
-                          showToast('🗑️ تم حذف وإغلاق شيت المدفوعات المرفوع بنجاح');
-                        }}
-                        className="px-3 py-1.5 rounded-lg text-xs font-bold text-rose-400 hover:text-white bg-rose-500/15 hover:bg-rose-600 border border-rose-500/30 transition-all cursor-pointer flex items-center gap-1.5 shadow-sm"
+                        onClick={handleClearSheet2}
+                        className="px-3 py-1.5 rounded-lg text-xs font-bold text-rose-400 hover:text-white bg-rose-500/15 hover:bg-rose-600 border border-rose-500/30 transition-all cursor-pointer flex items-center gap-1.5 shadow-sm active:scale-95"
                         title="إغلاق وحذف هذا الشيت في حالة رفعه بطريق الخطأ"
                       >
                         <X className="w-3.5 h-3.5" />
@@ -1492,12 +1581,8 @@ export default function App() {
                   <div className="flex items-center gap-2 w-full sm:w-auto justify-end">
                     {sheet3.length > 0 && (
                       <button
-                        onClick={() => {
-                          setSheet3([]);
-                          setSheet3FileName('');
-                          showToast('🗑️ تم حذف وإغلاق شيت الكاش المرفوع بنجاح');
-                        }}
-                        className="px-3 py-1.5 rounded-lg text-xs font-bold text-rose-400 hover:text-white bg-rose-500/15 hover:bg-rose-600 border border-rose-500/30 transition-all cursor-pointer flex items-center gap-1.5 shadow-sm"
+                        onClick={handleClearSheet3}
+                        className="px-3 py-1.5 rounded-lg text-xs font-bold text-rose-400 hover:text-white bg-rose-500/15 hover:bg-rose-600 border border-rose-500/30 transition-all cursor-pointer flex items-center gap-1.5 shadow-sm active:scale-95"
                         title="إغلاق وحذف هذا الشيت في حالة رفعه بطريق الخطأ"
                       >
                         <X className="w-3.5 h-3.5" />
@@ -2034,12 +2119,8 @@ export default function App() {
                         <span>⚡ تحويل ماكينات الكاش لـ 7-</span>
                       </button>
                       <button
-                        onClick={() => {
-                          setSheet1([]);
-                          setSheet1FileName('');
-                          showToast('🗑️ تم حذف وإغلاق شيت الماكينات المرفوع بنجاح');
-                        }}
-                        className="px-2.5 py-1 bg-rose-500/20 hover:bg-rose-600 text-rose-300 hover:text-white rounded-lg text-xs font-bold transition cursor-pointer flex items-center gap-1 border border-rose-500/30 shadow-sm"
+                        onClick={handleClearSheet1}
+                        className="px-2.5 py-1 bg-rose-500/20 hover:bg-rose-600 text-rose-300 hover:text-white rounded-lg text-xs font-bold transition cursor-pointer flex items-center gap-1 border border-rose-500/30 shadow-sm active:scale-95"
                         title="إغلاق وحذف هذا الشيت في حالة رفعه بطريق الخطأ"
                       >
                         <X className="w-3.5 h-3.5" />
@@ -2171,7 +2252,7 @@ export default function App() {
                             filteredPreviewRows.slice(0, 25).map((row, idx) => {
                               const mCol = colM1 || Object.keys(row)[0];
                               const machineVal = String(row[mCol] || '').trim();
-                              const isCash = machineVal.startsWith('7-') || machineVal.startsWith('٧-');
+                              const isCash = row._tabType === 'cash' || (row._tabType !== 'payments' && (machineVal.startsWith('7-') || machineVal.startsWith('٧-')));
                               return (
                                 <tr key={idx} className="hover:bg-slate-100 dark:hover:bg-slate-800/60 transition-colors">
                                   <td className="p-2 text-center text-slate-400 font-bold">{idx + 1}</td>
@@ -2276,12 +2357,8 @@ export default function App() {
                     </div>
                     <div className="flex items-center gap-2">
                       <button
-                        onClick={() => {
-                          setSheet2([]);
-                          setSheet2FileName('');
-                          showToast('🗑️ تم حذف وإغلاق شيت المدفوعات المرفوع بنجاح');
-                        }}
-                        className="px-2.5 py-1 bg-rose-500/20 hover:bg-rose-600 text-rose-300 hover:text-white rounded-lg text-xs font-bold transition cursor-pointer flex items-center gap-1 border border-rose-500/30 shadow-sm"
+                        onClick={handleClearSheet2}
+                        className="px-2.5 py-1 bg-rose-500/20 hover:bg-rose-600 text-rose-300 hover:text-white rounded-lg text-xs font-bold transition cursor-pointer flex items-center gap-1 border border-rose-500/30 shadow-sm active:scale-95"
                         title="إغلاق وحذف هذا الشيت في حالة رفعه بطريق الخطأ"
                       >
                         <X className="w-3.5 h-3.5" />
@@ -2404,12 +2481,8 @@ export default function App() {
                         ⚡ تحويل لـ 7-
                       </button>
                       <button
-                        onClick={() => {
-                          setSheet3([]);
-                          setSheet3FileName('');
-                          showToast('🗑️ تم حذف وإغلاق شيت الكاش المرفوع بنجاح');
-                        }}
-                        className="px-2.5 py-1 bg-rose-500/20 hover:bg-rose-600 text-rose-300 hover:text-white rounded-lg text-xs font-bold transition cursor-pointer flex items-center gap-1 border border-rose-500/30 shadow-sm"
+                        onClick={handleClearSheet3}
+                        className="px-2.5 py-1 bg-rose-500/20 hover:bg-rose-600 text-rose-300 hover:text-white rounded-lg text-xs font-bold transition cursor-pointer flex items-center gap-1 border border-rose-500/30 shadow-sm active:scale-95"
                         title="إغلاق وحذف هذا الشيت في حالة رفعه بطريق الخطأ"
                       >
                         <X className="w-3.5 h-3.5" />

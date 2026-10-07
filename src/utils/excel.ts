@@ -161,17 +161,25 @@ export async function parseExcelFile(file: File): Promise<SheetRow[]> {
   let allRowsCombined: SheetRow[] = [];
 
   if (hasMultipleSheets) {
-    for (const sheetName of workbook.SheetNames) {
+    for (let sIdx = 0; sIdx < workbook.SheetNames.length; sIdx++) {
+      const sheetName = workbook.SheetNames[sIdx];
       const ws = workbook.Sheets[sheetName];
       let candidateRows = extractRowsFromWorksheet(ws);
       if (!candidateRows.length) continue;
 
-      const isCashSheet = /كاش|cash/i.test(sheetName);
-      const isPaymentSheet = /مدفوعات|payment/i.test(sheetName);
+      let isCashSheet = /كاش|cash/i.test(sheetName);
+      let isPaymentSheet = /مدفوعات|payment|pay/i.test(sheetName);
+
+      // Support 2-tab template where Tab 1 (index 0) is Cash and Tab 2 (index 1) is Payments
+      if (!isCashSheet && !isPaymentSheet && workbook.SheetNames.length >= 2) {
+        if (sIdx === 0) isCashSheet = true;
+        if (sIdx === 1) isPaymentSheet = true;
+      }
 
       candidateRows = candidateRows.map((row) => ({
         ...row,
         _tabType: isCashSheet ? 'cash' : isPaymentSheet ? 'payments' : undefined,
+        _tabName: sheetName,
       }));
 
       allRowsCombined = [...allRowsCombined, ...candidateRows];
