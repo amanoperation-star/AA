@@ -100,14 +100,22 @@ export function filterRowsForTarget(
 
 export async function parseExcelFile(
   file: File,
-  targetType?: 'machines' | 'payments' | 'cash'
+  targetType?: 'machines' | 'payments' | 'cash',
+  onProgress?: (percent: number, stepText: string) => void
 ): Promise<SheetRow[]> {
+  const yieldToMain = () => new Promise((resolve) => setTimeout(resolve, 0));
   const isCsv = file.name.toLowerCase().endsWith('.csv');
+
+  onProgress?.(10, 'جاري فتح وقراءة الملف...');
+  await yieldToMain();
 
   // Fast-path for CSV files using direct text processing
   if (isCsv) {
     try {
       const text = await file.text();
+      onProgress?.(25, 'جاري تقسيم أسطر ملف CSV...');
+      await yieldToMain();
+
       const lines = text.split(/\r\n|\n|\r/);
       if (lines.length > 0) {
         let headerRowIdx = -1;
@@ -130,7 +138,15 @@ export async function parseExcelFile(
         }
 
         const rows: SheetRow[] = [];
+        const totalLines = lines.length - (headerRowIdx + 1);
+
         for (let i = headerRowIdx + 1; i < lines.length; i++) {
+          if (i % 3000 === 0) {
+            const pct = 30 + Math.floor(((i - headerRowIdx) / (totalLines || 1)) * 60);
+            onProgress?.(pct, `جاري قراءة السجلات (${i.toLocaleString('ar-EG')} / ${lines.length.toLocaleString('ar-EG')})...`);
+            await yieldToMain();
+          }
+
           const line = lines[i].trim();
           if (!line) continue;
           const cols = line.split(',').map((c) => c.replace(/^["']|["']$/g, '').trim());
@@ -148,6 +164,8 @@ export async function parseExcelFile(
         }
 
         if (rows.length > 0) {
+          onProgress?.(95, 'جاري تصفية وتنقية السجلات...');
+          await yieldToMain();
           return filterRowsForTarget(rows, targetType);
         }
       }
@@ -156,8 +174,14 @@ export async function parseExcelFile(
     }
   }
 
+  onProgress?.(20, 'تحميل ثنائيات إكسل في الذاكرة...');
+  await yieldToMain();
+
   const buffer = await file.arrayBuffer();
   let workbook: XLSX.WorkBook | null = null;
+
+  onProgress?.(40, 'جاري فك ضغط ورقة العمل وتحليل الخلايا...');
+  await yieldToMain();
 
   try {
     workbook = XLSX.read(buffer, {
@@ -166,6 +190,7 @@ export async function parseExcelFile(
       cellDates: false,
       cellStyles: false,
       cellFormula: false,
+      cellText: false,
       sheetStubs: false,
       dense: true,
     });
@@ -177,6 +202,7 @@ export async function parseExcelFile(
         cellDates: false,
         cellStyles: false,
         cellFormula: false,
+        cellText: false,
         sheetStubs: false,
         dense: true,
       });
@@ -188,6 +214,7 @@ export async function parseExcelFile(
           cellDates: false,
           cellStyles: false,
           cellFormula: false,
+          cellText: false,
           sheetStubs: false,
           dense: true,
         });
@@ -201,7 +228,10 @@ export async function parseExcelFile(
     return [];
   }
 
-  const extractRowsFromWorksheet = (worksheet: XLSX.WorkSheet): SheetRow[] => {
+  onProgress?.(60, 'استخراج البيانات وتحويل أسطر جدول البيانات...');
+  await yieldToMain();
+
+  const extractRowsFromWorksheet = async (worksheet: XLSX.WorkSheet): Promise<SheetRow[]> => {
     if (!worksheet || !worksheet['!ref']) return [];
     const aoa = XLSX.utils.sheet_to_json<any[]>(worksheet, { header: 1, defval: '', raw: true });
     if (!aoa || aoa.length === 0) return [];
@@ -235,7 +265,15 @@ export async function parseExcelFile(
     });
 
     const result: SheetRow[] = [];
+    const totalRows = aoa.length - (headerRowIdx + 1);
+
     for (let r = headerRowIdx + 1; r < aoa.length; r++) {
+      if (r % 3000 === 0) {
+        const pct = 60 + Math.floor(((r - headerRowIdx) / (totalRows || 1)) * 30);
+        onProgress?.(pct, `جاري معالجة السطر ${r.toLocaleString('ar-EG')} من ${aoa.length.toLocaleString('ar-EG')}...`);
+        await yieldToMain();
+      }
+
       const row = aoa[r];
       if (!Array.isArray(row)) continue;
       const rowObj: SheetRow = {};
@@ -266,32 +304,27 @@ export async function parseExcelFile(
     let sheetIndicesToProcess: number[] = [];
 
     if (targetType === 'cash') {
-      // Find cash sheets specifically (matching cash keywords or acceptor2/doner2)
       for (let sIdx = 0; sIdx < workbook.SheetNames.length; sIdx++) {
         const sheetName = workbook.SheetNames[sIdx];
         if (/كاش|cash|acceptor2|doner2|donor2|acceptor_2|doner_2|donor_2/i.test(sheetName)) {
           sheetIndicesToProcess.push(sIdx);
         }
       }
-      // If no explicit match and 2+ sheets, tab 0 is standard cash template
       if (sheetIndicesToProcess.length === 0 && workbook.SheetNames.length >= 2) {
         sheetIndicesToProcess.push(0);
       }
     } else if (targetType === 'payments') {
-      // Find payments sheets specifically
       for (let sIdx = 0; sIdx < workbook.SheetNames.length; sIdx++) {
         const sheetName = workbook.SheetNames[sIdx];
         if (/مدفوعات|payment|pay|acceptor1|doner1|donor1|acceptor(?![2-9])|doner(?![2-9])|donor(?![2-9])/i.test(sheetName)) {
           sheetIndicesToProcess.push(sIdx);
         }
       }
-      // If no explicit match and 2+ sheets, tab 1 is standard payments template
       if (sheetIndicesToProcess.length === 0 && workbook.SheetNames.length >= 2) {
         sheetIndicesToProcess.push(1);
       }
     }
 
-    // Default to all sheets if none filtered or targetType === 'machines'
     if (sheetIndicesToProcess.length === 0) {
       sheetIndicesToProcess = workbook.SheetNames.map((_, i) => i);
     }
@@ -299,13 +332,12 @@ export async function parseExcelFile(
     for (const sIdx of sheetIndicesToProcess) {
       const sheetName = workbook.SheetNames[sIdx];
       const ws = workbook.Sheets[sheetName];
-      let candidateRows = extractRowsFromWorksheet(ws);
+      let candidateRows = await extractRowsFromWorksheet(ws);
       if (!candidateRows.length) continue;
 
       let isCashSheet = /كاش|cash|acceptor2|doner2|donor2/i.test(sheetName);
       let isPaymentSheet = /مدفوعات|payment|pay|acceptor1|doner1|donor1/i.test(sheetName);
 
-      // Support 2-tab template where Tab 1 (index 0) is Cash and Tab 2 (index 1) is Payments
       if (!isCashSheet && !isPaymentSheet && workbook.SheetNames.length >= 2) {
         if (sIdx === 0) isCashSheet = true;
         if (sIdx === 1) isPaymentSheet = true;
@@ -322,41 +354,22 @@ export async function parseExcelFile(
   }
 
   if (allRowsCombined.length > 0) {
+    onProgress?.(95, 'تطبيق قواعد الفلترة والتنقية...');
+    await yieldToMain();
     return filterRowsForTarget(allRowsCombined, targetType);
   }
 
   let bestRows: SheetRow[] = [];
   for (const sheetName of workbook.SheetNames) {
     const ws = workbook.Sheets[sheetName];
-    const candidateRows = extractRowsFromWorksheet(ws);
+    const candidateRows = await extractRowsFromWorksheet(ws);
     if (candidateRows.length > bestRows.length) {
       bestRows = candidateRows;
     }
   }
 
-  if (bestRows.length === 0) {
-    for (const sheetName of workbook.SheetNames) {
-      const ws = workbook.Sheets[sheetName];
-      const rawRows = XLSX.utils.sheet_to_json<SheetRow>(ws, { defval: '', raw: false });
-      const cleaned = rawRows
-        .map((row) => {
-          const cRow: SheetRow = {};
-          for (const key of Object.keys(row)) {
-            const cleanKey = key.replace(/^\uFEFF/, '').trim();
-            cRow[cleanKey] = typeof row[key] === 'string' ? row[key].trim() : row[key];
-          }
-          return cRow;
-        })
-        .filter((row) =>
-          Object.values(row).some((v) => v !== undefined && v !== null && String(v).trim() !== '')
-        );
-
-      if (cleaned.length > bestRows.length) {
-        bestRows = cleaned;
-      }
-    }
-  }
-
+  onProgress?.(95, 'اكتمل التحليل الفني بنجاح.');
+  await yieldToMain();
   return filterRowsForTarget(bestRows, targetType);
 }
 
@@ -596,4 +609,111 @@ export function exportReconciliationToCsv(rows: ExpandedRow[], fileName = 'تق�
   link.click();
   document.body.removeChild(link);
   URL.revokeObjectURL(link.href);
+}
+
+export function exportRepStatementToExcel(
+  records: Array<{
+    machine: string;
+    account: string;
+    repName: string;
+    type: 'cash' | 'pay';
+    typeLabel: string;
+    repOrder?: number;
+    totalReps?: number;
+    statusLabel?: string;
+    otherReps?: string;
+  }>,
+  repAccount: string,
+  repName = 'غير مدون',
+  filename = 'كشف_سجلات_وارتباطات_المندوب_المفصلة.xlsx'
+) {
+  const totalLinks = records.length;
+  const uniqueMachines = new Set(records.map((r) => r.machine.replace(/^7-|^٧-/, ''))).size;
+  const cashCount = records.filter((r) => r.type === 'cash').length;
+  const payCount = records.filter((r) => r.type === 'pay').length;
+
+  // Count machine duplicates for this rep
+  const machineMap = new Map<string, number>();
+  records.forEach((r) => {
+    const norm = r.machine.replace(/^7-|^٧-/, '');
+    machineMap.set(norm, (machineMap.get(norm) || 0) + 1);
+  });
+  let dupCount = 0;
+  machineMap.forEach((cnt) => {
+    if (cnt > 1) dupCount += cnt;
+  });
+
+  // Top summary rows (Image 2 format)
+  const aoa: (string | number)[][] = [
+    ['كشف سجلات وارتباطات المندوب المفصلة (جميع الأسطر)'],
+    ['اسم المندوب:', repName],
+    ['رقم الحساب:', repAccount],
+    ['إجمالي عدد الارتباطات والأسطر:', totalLinks],
+    ['إجمالي عدد الماكينات الفريدة:', uniqueMachines],
+    ['ماكينات مكررة لنفس المندوب:', dupCount],
+    ['سجلات الكاش (7-):', cashCount],
+    ['سجلات المدفوعات:', payCount],
+    [], // empty row separator
+    // Table Headers (Exact Image 2 format)
+    [
+      'اسم المندوب',
+      'رقم حساب المندوب',
+      'المناديب المشاركون على الماكينة',
+      'حالة الملكية والتعدد مع الآخرين',
+      'تفاصيل نوع الارتباط',
+      'إجمالي تكرار الماكينة للمندوب',
+      'ترتيب السجل للمندوب',
+      'نوع الحساب',
+      'رقم الماكينة',
+    ],
+  ];
+
+  // Data rows
+  const machineOccurrenceCounter = new Map<string, number>();
+
+  records.forEach((rec) => {
+    const norm = rec.machine.replace(/^7-|^٧-/, '');
+    const currentOrd = (machineOccurrenceCounter.get(norm) || 0) + 1;
+    machineOccurrenceCounter.set(norm, currentOrd);
+    const totalOccForMachine = machineMap.get(norm) || 1;
+
+    let orderStr = `${currentOrd} من ${totalOccForMachine}`;
+    if (totalOccForMachine === 1) orderStr = 'وحيد (1 من 1)';
+
+    let ownershipStr = 'مطابقة فردية للمندوب';
+    if (totalOccForMachine > 1) {
+      ownershipStr = `مكررة لنفس المندوب (${totalOccForMachine} أسطر)`;
+    }
+
+    aoa.push([
+      rec.repName || repName,
+      rec.account || repAccount,
+      rec.otherReps || 'لا يوجد مشاركون آخرون',
+      ownershipStr,
+      rec.type === 'cash' ? 'حساب أجهزة الكاش (7-)' : 'حساب المدفوعات العامة',
+      totalOccForMachine,
+      orderStr,
+      rec.typeLabel || (rec.type === 'cash' ? 'كاش' : 'مدفوعات'),
+      rec.machine,
+    ]);
+  });
+
+  const wb = XLSX.utils.book_new();
+  const ws = XLSX.utils.aoa_to_sheet(aoa);
+
+  // Column widths
+  ws['!cols'] = [
+    { wch: 25 }, // اسم المندوب
+    { wch: 18 }, // رقم حساب المندوب
+    { wch: 28 }, // المناديب المشاركون
+    { wch: 28 }, // حالة الملكية والتعدد
+    { wch: 22 }, // تفاصيل نوع الارتباط
+    { wch: 24 }, // إجمالي تكرار الماكينة
+    { wch: 20 }, // ترتيب السجل
+    { wch: 16 }, // نوع الحساب
+    { wch: 22 }, // رقم الماكينة
+  ];
+
+  XLSX.utils.book_append_sheet(wb, ws, 'كشف_المندوب_المفصل');
+  XLSX.writeFile(wb, filename);
 }

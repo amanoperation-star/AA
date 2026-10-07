@@ -292,7 +292,7 @@ export default function App() {
   }, [sheet1, sheet2, sheet3]);
 
   // Core Reconciliation Engine (Supports Sheet 1: Machines, Sheet 2: Payments, Sheet 3: Cash)
-  const executeReconciliation = (
+  const executeReconciliation = async (
     s1: SheetRow[],
     s2: SheetRow[],
     s3: SheetRow[],
@@ -305,6 +305,7 @@ export default function App() {
     cashRepNameCol: string,
     fallbackVal = emptyRepFallback
   ) => {
+    const yieldToMain = () => new Promise((resolve) => setTimeout(resolve, 0));
     const repMap = new Map<string, Array<{ account: string; name: string; isMissingRepName: boolean; type: 'payment' | 'cash' }>>();
     const irregularsList: IrregularAccountItem[] = [];
 
@@ -360,6 +361,7 @@ export default function App() {
 
     // Process Sheet 2 (Payments)
     for (let i = 0; i < s2.length; i++) {
+      if (i > 0 && i % 4000 === 0) await yieldToMain();
       const row = s2[i];
       const rawM = row[effectiveM2];
       if (rawM !== undefined && rawM !== null && rawM !== '') {
@@ -408,6 +410,7 @@ export default function App() {
 
     // Process Sheet 3 (Cash)
     for (let i = 0; i < s3.length; i++) {
+      if (i > 0 && i % 4000 === 0) await yieldToMain();
       const row = s3[i];
       const rawM = row[effectiveM3];
       if (rawM !== undefined && rawM !== null && rawM !== '') {
@@ -476,6 +479,7 @@ export default function App() {
     let rowCounter = 0;
 
     for (let i = 0; i < s1.length; i++) {
+      if (i > 0 && i % 4000 === 0) await yieldToMain();
       const row = s1[i];
       const mVal = row[effectiveM1];
       if (mVal === undefined || mVal === null || mVal === '') continue;
@@ -527,9 +531,6 @@ export default function App() {
           rowCounter++;
           const r = reps[rIdx];
 
-          // CRITICAL ACCURACY FIX:
-          // Payment accounts (r.type === 'payment') MUST display clean machine ID without 7- prefix
-          // Cash accounts (r.type === 'cash') MUST display machine ID with 7- prefix
           const repMachineId = r.type === 'payment'
             ? cleanMachineId
             : (cleanMachineId.startsWith('7-') || cleanMachineId.startsWith('٧-') ? cleanMachineId : `7-${cleanMachineId}`);
@@ -600,14 +601,16 @@ export default function App() {
       title: 'قراءة',
       fileName: file.name,
       subtitle: 'جاري تحليل خلايا وسجلات ملف الإكسل...',
-      percent: 25,
+      percent: 10,
       stepText: 'تحويل ورقة العمل واستخراج بيانات الخلايا...',
       countText: '',
       isComplete: false,
     });
 
     try {
-      const data = await parseExcelFile(file, 'machines');
+      const data = await parseExcelFile(file, 'machines', (percent, stepText) => {
+        setProgressState((p) => ({ ...p, percent, stepText }));
+      });
       if (!data || data.length === 0) {
         setIsSheet1Loading(false);
         setProgressState((p) => ({ ...p, isOpen: false }));
@@ -621,7 +624,7 @@ export default function App() {
 
       setProgressState((p) => ({
         ...p,
-        percent: 85,
+        percent: 90,
         stepText: 'استخراج أرقام الماكينات وتدقيق التكرارات...',
       }));
 
@@ -683,14 +686,16 @@ export default function App() {
       title: 'قراءة',
       fileName: file.name,
       subtitle: 'جاري تحليل خلايا وسجلات ملف الإكسل واستخراج بيانات المدفوعات...',
-      percent: 25,
+      percent: 10,
       stepText: 'تحويل ورقة العمل واستخراج بيانات الخلايا...',
       countText: '',
       isComplete: false,
     });
 
     try {
-      const data = await parseExcelFile(file, 'payments');
+      const data = await parseExcelFile(file, 'payments', (percent, stepText) => {
+        setProgressState((p) => ({ ...p, percent, stepText }));
+      });
       if (!data || data.length === 0) {
         setIsSheet2Loading(false);
         setProgressState((p) => ({ ...p, isOpen: false }));
@@ -730,7 +735,7 @@ export default function App() {
 
       setProgressState((p) => ({
         ...p,
-        percent: 85,
+        percent: 90,
         stepText: 'استخراج أرقام الحسابات وتدقيق سجلات المناديب...',
       }));
 
@@ -777,14 +782,16 @@ export default function App() {
       title: 'قراءة',
       fileName: file.name,
       subtitle: 'جاري تحليل خلايا وسجلات ملف الإكسل واستخراج بيانات الكاش...',
-      percent: 25,
+      percent: 10,
       stepText: 'تحويل ورقة العمل واستخراج بيانات الخلايا...',
       countText: '',
       isComplete: false,
     });
 
     try {
-      const data = await parseExcelFile(file, 'cash');
+      const data = await parseExcelFile(file, 'cash', (percent, stepText) => {
+        setProgressState((p) => ({ ...p, percent, stepText }));
+      });
       if (!data || data.length === 0) {
         setIsSheet3Loading(false);
         setProgressState((p) => ({ ...p, isOpen: false }));
@@ -824,7 +831,7 @@ export default function App() {
 
       setProgressState((p) => ({
         ...p,
-        percent: 85,
+        percent: 90,
         stepText: 'استخراج أرقام ماكينات الكاش وتدقيق التكرارات...',
       }));
 
@@ -1539,7 +1546,7 @@ export default function App() {
         onConfirm={performResetAll}
       />
 
-      {/* Rep Machines Lookup Modal */}
+      {/* Rep / Machine Lookup Modal */}
       <RepLookupModal
         isOpen={isRepLookupOpen}
         onClose={() => setIsRepLookupOpen(false)}
@@ -1561,8 +1568,8 @@ export default function App() {
           setSearchQuery(query);
           setCurrentFilter('all');
           setCurrentPage(1);
-          setCurrentTab(4);
-          showToast(`🔍 تم تصفية الجدول للماكينات المربوطة بالمندوب: ${query}`);
+          setCurrentTab(5);
+          showToast(`🔍 تم تطبيق التصفية للماكينة / المندوب: ${query}`);
         }}
       />
 
@@ -3407,10 +3414,11 @@ export default function App() {
                         setRepLookupQuery('');
                         setIsRepLookupOpen(true);
                       }}
-                      className="px-3 py-1.5 rounded-lg bg-blue-600 text-white shadow-sm flex items-center gap-1.5 cursor-pointer"
+                      className="px-3 py-1.5 rounded-lg bg-[#0284c7] hover:bg-[#0369a1] text-white shadow-sm flex items-center gap-1.5 cursor-pointer transition-colors"
+                      title="فتح استعلام أجهزة POS والمناديب"
                     >
                       <UserCheck className="w-3.5 h-3.5" />
-                      <span>استعلام ماكينات مندوب</span>
+                      <span>استعلام مندوب / ماكينة</span>
                     </button>
                     <button
                       onClick={() => {
@@ -3586,16 +3594,9 @@ export default function App() {
                                       بيانات المندوب:
                                     </span>
                                     {item.account !== 'غير متوفر' ? (
-                                      <button
-                                        onClick={() => {
-                                          setRepLookupQuery(item.account);
-                                          setIsRepLookupOpen(true);
-                                        }}
-                                        className="font-mono text-xs font-black px-2 py-0.5 rounded-md bg-indigo-600/20 text-indigo-400 border border-indigo-500/30 hover:bg-indigo-600 hover:text-white transition-all cursor-pointer"
-                                        title="اضغط لاستعلام كافة ماكينات هذا المندوب"
-                                      >
+                                      <span className="font-mono text-xs font-black px-2 py-0.5 rounded-md bg-indigo-600/20 text-indigo-400 border border-indigo-500/30">
                                         حساب: {item.account}
-                                      </button>
+                                      </span>
                                     ) : (
                                       <span className="text-[10px] text-slate-400 font-mono">بدون كود</span>
                                     )}
@@ -3625,18 +3626,6 @@ export default function App() {
                                       ? `مندوب رقم ${item.repOrder} من ${item.totalRepsForMachine}`
                                       : 'ماكينة فردية'}
                                   </span>
-                                  <button
-                                    onClick={() => {
-                                      setRepLookupQuery(
-                                        item.account !== 'غير متوفر' ? item.account : item.repName
-                                      );
-                                      setIsRepLookupOpen(true);
-                                    }}
-                                    className="text-xs font-bold text-indigo-500 hover:text-indigo-400 flex items-center gap-1 cursor-pointer"
-                                  >
-                                    <span>كشف المندوب</span>
-                                    <ChevronLeft className="w-3.5 h-3.5" />
-                                  </button>
                                 </div>
                               </div>
                             );
@@ -3997,12 +3986,14 @@ export default function App() {
                                 {/* Account Type Column */}
                                  <td className="p-3.5 text-center font-bold">
                                    {item.type === 'cash' ? (
-                                     <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-black bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
-                                       💵 كاش
+                                     <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold bg-[#042016] text-[#34d399] border border-[#065f46] shadow-sm">
+                                       <span>💵</span>
+                                       <span>كاش (-7)</span>
                                      </span>
                                    ) : (
-                                     <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-black bg-blue-500/10 text-blue-400 border border-blue-500/20">
-                                       💳 مدفوعات
+                                     <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold bg-[#0d1427] text-[#38bdf8] border border-[#1e3a8a] shadow-sm">
+                                       <span>💳</span>
+                                       <span>مدفوعات</span>
                                      </span>
                                    )}
                                  </td>
@@ -4012,20 +4003,13 @@ export default function App() {
                                   {item.account === 'غير متوفر' ? (
                                     <span className="text-slate-500 font-mono text-xs">غير متوفر</span>
                                   ) : (
-                                    <button
-                                      onClick={() => {
-                                        setRepLookupQuery(item.account);
-                                        setIsRepLookupOpen(true);
-                                      }}
-                                      className="font-mono text-xs font-bold px-3 py-1 rounded-lg bg-blue-950/60 text-blue-400 border border-blue-500/30 hover:bg-blue-900/60 transition-colors cursor-pointer"
-                                      title="اضغط لمعاينة كافة ماكينات هذا المندوب وتصدير كشف خاص به"
-                                    >
+                                    <span className="font-mono text-xs font-bold px-3 py-1 rounded-lg bg-blue-950/60 text-blue-400 border border-blue-500/30 inline-block">
                                       {item.account}
-                                    </button>
+                                    </span>
                                   )}
                                 </td>
 
-                                {/* Rep Name Column */}
+                                 {/* Rep Name Column */}
                                 <td className="p-3.5">
                                   {item.status === 'none' || item.isMissingRepName ? (
                                     <div className="flex items-center gap-2.5">
@@ -4037,21 +4021,14 @@ export default function App() {
                                       </span>
                                     </div>
                                   ) : (
-                                    <button
-                                      onClick={() => {
-                                        setRepLookupQuery(item.account !== 'غير متوفر' ? item.account : item.repName);
-                                        setIsRepLookupOpen(true);
-                                      }}
-                                      className="flex items-center gap-2.5 hover:opacity-80 transition-opacity cursor-pointer group text-right"
-                                      title="اضغط لمعاينة كافة ماكينات هذا المندوب"
-                                    >
-                                      <div className="w-7 h-7 rounded-full bg-slate-800 border border-slate-700/60 text-blue-400 flex items-center justify-center text-xs shadow-inner group-hover:bg-blue-600 group-hover:text-white transition-colors">
+                                    <div className="flex items-center gap-2.5 text-right">
+                                      <div className="w-7 h-7 rounded-full bg-slate-800 border border-slate-700/60 text-blue-400 flex items-center justify-center text-xs shadow-inner">
                                         <UserCheck className="w-3.5 h-3.5" />
                                       </div>
-                                      <span className="font-bold text-white text-xs group-hover:text-blue-300 transition-colors">
+                                      <span className="font-bold text-white text-xs">
                                         {item.repName}
                                       </span>
-                                    </button>
+                                    </div>
                                   )}
                                 </td>
 
@@ -4178,7 +4155,6 @@ export default function App() {
             sheet2={sheet2}
             expandedRows={expandedRows}
             machinesResults={machinesResults}
-            onOpenRepLookup={() => setIsRepLookupOpen(true)}
             onOpenManualEditor={(mode) => {
               setEditorInitialMode(mode);
               setIsManualEditorOpen(true);

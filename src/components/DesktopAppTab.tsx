@@ -33,7 +33,6 @@ interface DesktopAppTabProps {
   sheet2: SheetRow[];
   expandedRows: ExpandedRow[];
   machinesResults: MachineSummary[];
-  onOpenRepLookup: () => void;
   onOpenManualEditor: (mode: 1 | 2) => void;
 }
 
@@ -42,7 +41,6 @@ export const DesktopAppTab: React.FC<DesktopAppTabProps> = ({
   sheet2,
   expandedRows,
   machinesResults,
-  onOpenRepLookup,
   onOpenManualEditor,
 }) => {
   const [activeTab, setActiveTab] = useState<'preview' | 'code' | 'docs'>('preview');

@@ -154,13 +154,13 @@ export const DesktopHeader: React.FC<DesktopHeaderProps> = ({
             <button
               onClick={onOpenRepLookup}
               className="px-2.5 py-1.5 text-xs font-bold text-slate-300 hover:text-white flex items-center gap-1.5 transition-colors cursor-pointer shrink-0"
-              title="استعلام سريع عن المناديب والماكينات"
+              title="استعلام سريع عن رقم الماكينة أو المندوب"
             >
               <User className="w-4 h-4 text-slate-400" />
               <span>استعلام مندوب / ماكينة</span>
             </button>
 
-            {/* 3. تحميل HTML (Green) */}
+            {/* 2. تحميل HTML (Green) */}
             <a
               href="/MatchHub-Enterprise-Desktop-v5.html"
               download="MatchHub-Enterprise-Desktop-v5.html"
