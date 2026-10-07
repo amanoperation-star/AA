@@ -1,5 +1,4 @@
 import React from 'react';
-import { Settings, CheckCircle2, FileSpreadsheet, X } from 'lucide-react';
 
 interface ProgressModalProps {
   isOpen: boolean;
@@ -17,10 +16,10 @@ export const ProgressModal: React.FC<ProgressModalProps> = ({
   isOpen,
   onClose,
   title = 'قراءة',
-  fileName = 'نموذج_شيت_ربط_المناديب_والحسابات.csv',
-  subtitle = 'جاري تحليل خلايا وسجلات ملف الإكسل...',
-  percent = 60,
-  stepText = 'تحويل ورقة العمل إلى هيكل بيانات JSON...',
+  fileName = 'data_report.xlsx',
+  subtitle = 'جاري قراءة ومعالجة البيانات من الملف المرفق، يرجى الانتظار حتى اكتمال المعالجة...',
+  percent = 25,
+  stepText = 'جاري استخراج السجلات وإعداد الجداول...',
   countText,
   isComplete = false,
 }) => {
@@ -29,88 +28,97 @@ export const ProgressModal: React.FC<ProgressModalProps> = ({
   const roundedPercent = Math.min(100, Math.max(0, Math.round(percent)));
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-[#030712]/85 backdrop-blur-md transition-all duration-300 p-4 font-['Cairo']">
-      {/* Exact Floating Card matching image.png */}
-      <div className="bg-[#0c1326] border border-slate-800/90 rounded-3xl p-6 sm:p-7 max-w-xl w-full mx-auto shadow-[0_25px_60px_-15px_rgba(0,0,0,0.9)] relative overflow-hidden text-right select-none animate-in fade-in zoom-in-95 duration-200">
-        
-        {/* Subtle Ambient Glow */}
-        <div className="absolute top-0 right-1/4 w-48 h-48 bg-blue-600/10 rounded-full blur-3xl pointer-events-none" />
-        <div className="absolute bottom-0 left-1/4 w-48 h-48 bg-indigo-600/10 rounded-full blur-3xl pointer-events-none" />
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-[#070a12]/80 backdrop-blur-md p-4 font-['Cairo'] text-right select-none transition-all duration-300">
+      {/* Background Subtle Animated Grid */}
+      <div className="absolute inset-0 modal-bg-grid pointer-events-none z-0 opacity-80" />
 
-        {/* 1. TOP HEADER SECTION */}
-        <div className="flex items-start justify-between gap-4 mb-4">
-          {/* Top Left in RTL: Percentage Capsule Badge + Prominent Close Button */}
-          <div className="order-2 sm:order-1 shrink-0 flex items-center gap-2">
-            <span className="px-3.5 py-1 rounded-full text-xs font-mono font-black bg-[#0d1c3a] text-blue-400 border border-blue-500/40 shadow-inner inline-block">
+      {/* Radial ambient glow gradients */}
+      <div className="absolute w-96 h-96 bg-blue-600/15 rounded-full blur-3xl pointer-events-none -top-10 -right-10" />
+      <div className="absolute w-96 h-96 bg-indigo-600/15 rounded-full blur-3xl pointer-events-none -bottom-10 -left-10" />
+
+      {/* Main Modal Container matching exact HTML / CSS */}
+      <div className="relative z-10 w-full max-w-[640px] bg-[#0f172a]/85 backdrop-blur-xl border border-white/[0.08] rounded-[24px] p-7 sm:p-8 shadow-[0_25px_50px_-12px_rgba(0,0,0,0.6),0_0_40px_0_rgba(59,130,246,0.12),inset_0_1px_1px_0_rgba(255,255,255,0.1)] overflow-hidden animate-in fade-in zoom-in-95 duration-200">
+        
+        {/* Top Header Navigation */}
+        <div className="flex items-center justify-between gap-4 mb-5">
+          
+          {/* Right Info & File (In RTL this is on the right) */}
+          <div className="flex flex-col gap-1 order-1">
+            <div className="flex items-center gap-2.5 flex-wrap">
+              <h2 className="text-2xl font-extrabold text-[#f8fafc] leading-tight">
+                {title}
+              </h2>
+              <div className="inline-flex items-center gap-1.5 font-['Fira_Code',monospace] text-[13px] text-[#94a3b8] bg-white/[0.04] border border-white/[0.08] px-2.5 py-1 rounded-lg" dir="ltr">
+                <i className="fa-solid fa-file-excel text-[#38bdf8] text-xs"></i>
+                <span className="truncate max-w-[180px] sm:max-w-[240px]" title={fileName}>
+                  {fileName || 'data_report.xlsx'}
+                </span>
+              </div>
+            </div>
+          </div>
+
+          {/* Center Gear Animation */}
+          <div className="relative w-[52px] h-[52px] rounded-2xl bg-gradient-to-br from-[#3b82f6]/20 to-[#6366f1]/10 border border-[#3b82f6]/35 flex items-center justify-center shadow-[0_0_20px_rgba(59,130,246,0.2)] shrink-0 order-2">
+            <i className={`fa-solid fa-gear text-[22px] text-[#38bdf8] ${!isComplete ? 'animate-spin' : ''}`}></i>
+          </div>
+
+          {/* Left Controls: Close Button & Top Percentage (In RTL this is on the left) */}
+          <div className="flex items-center gap-2.5 order-3 shrink-0">
+            <span className="font-['Fira_Code',monospace] text-[13px] font-semibold text-[#38bdf8] bg-[#38bdf8]/10 border border-[#38bdf8]/25 px-3 py-1.5 rounded-full min-w-[52px] text-center" dir="ltr">
               {roundedPercent}%
             </span>
             {onClose && (
               <button
                 type="button"
-                onClick={(e) => {
-                  e.preventDefault();
-                  e.stopPropagation();
-                  onClose();
-                }}
-                className="px-3 py-1.5 rounded-xl bg-rose-500/20 hover:bg-rose-600 text-rose-300 hover:text-white flex items-center gap-1.5 transition-all border border-rose-500/40 shrink-0 cursor-pointer shadow-md active:scale-95 text-xs font-bold"
-                title="إغلاق النافذة فوراً"
+                onClick={onClose}
+                className="inline-flex items-center gap-1.5 bg-[#e11d48]/15 hover:bg-[#e11d48]/30 border border-[#e11d48]/35 text-[#fda4af] hover:text-white px-3.5 sm:px-4 py-1.5 rounded-xl text-[13px] font-bold cursor-pointer transition-all duration-200 active:scale-95 shadow-sm"
               >
-                <X className="w-3.5 h-3.5 text-rose-300 group-hover:text-white" />
-                <span>إغلاق ✕</span>
+                <i className="fa-solid fa-xmark text-xs"></i>
+                <span>{isComplete ? 'إغلاق' : 'إلغاء الأمر'}</span>
               </button>
             )}
           </div>
-
-          {/* Top Right in RTL: Spinning Gear Icon + Title + File Name + Subtitle */}
-          <div className="flex items-start gap-3.5 order-1 sm:order-2 flex-1">
-            {/* Spinning Gear Icon in Circular Dark Blue Badge */}
-            <div className="w-12 h-12 rounded-2xl bg-blue-600/20 text-blue-400 border border-blue-500/30 flex items-center justify-center shrink-0 shadow-sm">
-              <Settings className="w-6 h-6 animate-spin text-blue-400" />
-            </div>
-
-            {/* Texts */}
-            <div className="space-y-0.5">
-              <h3 className="text-base sm:text-lg font-black text-white leading-tight">
-                {title}
-              </h3>
-              <p className="text-sm font-bold text-slate-100 font-mono tracking-wide break-all" dir="ltr">
-                {fileName}
-              </p>
-              <p className="text-xs text-slate-400 font-medium pt-0.5">
-                {subtitle}
-              </p>
-            </div>
-          </div>
         </div>
 
-        {/* 2. PROGRESS BAR TRACK */}
-        <div className="my-4">
-          <div className="w-full h-3 bg-[#080d1a] rounded-full overflow-hidden p-0.5 border border-slate-700/60 shadow-inner">
+        {/* Description Paragraph */}
+        <p className="text-[#94a3b8] text-sm leading-relaxed mb-6 font-normal">
+          {subtitle}
+        </p>
+
+        {/* Progress Bar Section */}
+        <div className="mb-5">
+          <div className="relative h-2.5 w-full bg-[#0f172a]/90 rounded-full border border-white/[0.05] shadow-[inset_0_2px_4px_rgba(0,0,0,0.6)] overflow-hidden p-[2px]">
             <div
-              className="h-full bg-gradient-to-r from-indigo-500 via-blue-400 to-amber-400 rounded-full transition-all duration-200 ease-out shadow-[0_0_12px_rgba(59,130,246,0.6)]"
+              className="h-full rounded-full bg-gradient-to-r from-[#6366f1] via-[#3b82f6] to-[#f59e0b] shadow-[0_0_12px_rgba(56,189,248,0.5)] progress-bar-animated-fill transition-all duration-300 ease-out"
               style={{ width: `${roundedPercent}%` }}
             />
           </div>
         </div>
 
-        {/* 3. BOTTOM FOOTER SECTION */}
-        <div className="flex items-center justify-between text-xs pt-1">
-          {/* Left in RTL: Percentage number in purple/blue font */}
-          <span className="font-mono font-bold text-indigo-400 order-2 sm:order-1 text-xs">
-            {roundedPercent}%
-          </span>
+        {/* Bottom Footer Status */}
+        <div className="flex items-center justify-between gap-3 text-[13px]">
+          <div className="text-[#94a3b8] flex items-center gap-2 font-medium">
+            <span className={`w-2 h-2 rounded-full ${isComplete ? 'bg-emerald-400 shadow-[0_0_8px_#10b981]' : 'bg-[#38bdf8] shadow-[0_0_8px_#38bdf8] status-dot-pulse'}`} />
+            <span className="truncate max-w-[280px] sm:max-w-[420px]">
+              {stepText || 'جاري استخراج السجلات وإعداد الجداول...'}
+            </span>
+            {countText && (
+              <span className="text-[11px] text-[#38bdf8] font-mono font-bold bg-[#38bdf8]/10 px-2 py-0.5 rounded-md">
+                {countText}
+              </span>
+            )}
+          </div>
 
-          {/* Right in RTL: Step details / status description */}
-          <span className="text-slate-400 font-medium order-1 sm:order-2 text-xs truncate max-w-[80%]">
-            {stepText || 'تحويل ورقة العمل إلى هيكل بيانات JSON...'}
+          <span className="font-['Fira_Code',monospace] font-semibold text-[#6366f1]" dir="ltr">
+            {roundedPercent}%
           </span>
         </div>
 
-        {/* Complete State Badge */}
+        {/* Completed notification pill if isComplete */}
         {isComplete && (
           <div className="mt-4 p-2.5 rounded-xl bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 text-xs font-bold text-center flex items-center justify-center gap-2 animate-in fade-in">
-            <CheckCircle2 className="w-4 h-4 text-emerald-400" />
-            <span>اكتملت المعالجة بنجاح! يتم تحديث الجداول...</span>
+            <i className="fa-solid fa-circle-check text-emerald-400"></i>
+            <span>اكتملت المعالجة بنجاح! يتم الآن تحديث البيانات...</span>
           </div>
         )}
       </div>

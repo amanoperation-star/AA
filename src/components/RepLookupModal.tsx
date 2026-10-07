@@ -17,6 +17,8 @@ import {
   Sparkles,
   HelpCircle,
   TableProperties,
+  Repeat,
+  AlertTriangle,
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { MachineSummary, ExpandedRow, SheetRow } from '../types';
@@ -50,55 +52,6 @@ function normalizeText(text: string | number | undefined | null): string {
     clean = clean.substring(0, clean.length - 2);
   }
   return clean;
-}
-
-function sumFinancialColumns(rows: SheetRow[], keywords: string[]): number {
-  if (!rows || rows.length === 0) return 0;
-  
-  // Find all columns in the first row that match any of the keywords
-  const firstRow = rows[0];
-  const matchingCols = Object.keys(firstRow).filter(key => {
-    const normKey = key.toLowerCase();
-    return keywords.some(kw => normKey.includes(kw.toLowerCase()));
-  });
-
-  if (matchingCols.length === 0) {
-    // Fallback: search for any column that has purely numeric/decimal values except columns that look like IDs/Accounts
-    const numericCols = Object.keys(firstRow).filter(key => {
-      const normKey = key.toLowerCase();
-      // Exclude IDs, machine numbers, accounts, telephone numbers, order index etc.
-      if (/ماكينة|جهاز|pos|machine|sn|id|account|acc|code|تليفون|هاتف|رقم|موبايل|phone|mobile|date|تاريخ|index|serial|مسلسل|الترتيب/i.test(normKey)) {
-        return false;
-      }
-      // Check if values are mostly numeric
-      const val = firstRow[key];
-      if (val === undefined || val === null) return false;
-      const cleanVal = String(val).replace(/,/g, '').trim();
-      const num = parseFloat(cleanVal);
-      return !isNaN(num) && num > 0;
-    });
-    matchingCols.push(...numericCols);
-  }
-
-  // De-duplicate matching columns
-  const finalCols = Array.from(new Set(matchingCols));
-
-  let totalSum = 0;
-  rows.forEach(row => {
-    finalCols.forEach(col => {
-      const val = row[col];
-      if (val !== undefined && val !== null) {
-        // Remove commas and parse
-        const cleanVal = String(val).replace(/,/g, '').trim();
-        const num = parseFloat(cleanVal);
-        if (!isNaN(num)) {
-          totalSum += num;
-        }
-      }
-    });
-  });
-
-  return totalSum;
 }
 
 interface RepLookupModalProps {
@@ -143,31 +96,103 @@ export const RepLookupModal: React.FC<RepLookupModalProps> = ({
 }) => {
   const [activeTab, setActiveTab] = useState<'rep' | 'machine'>(initialMode);
   const [lookupViewMode, setLookupViewMode] = useState<'cards' | 'table'>('table');
+  const [repFilterMode, setRepFilterMode] = useState<'all' | 'duplicated' | 'cash' | 'payment' | 'both' | 'shared'>('all');
+  const [repListDisplayMode, setRepListDisplayMode] = useState<'occurrences' | 'summary'>('occurrences');
   const [searchQuery, setSearchQuery] = useState(initialRepQuery || '');
+  const [debouncedSearchQuery, setDebouncedSearchQuery] = useState(initialRepQuery || '');
+  const [visibleMachinesLimit, setVisibleMachinesLimit] = useState(100);
+
+  // Reset limit and filter mode when query changes
+  useEffect(() => {
+    setVisibleMachinesLimit(100);
+    setRepFilterMode('all');
+  }, [debouncedSearchQuery]);
+
+  // Debounce search query changes
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setDebouncedSearchQuery(searchQuery);
+    }, 400); // 400ms debounce
+    return () => clearTimeout(timer);
+  }, [searchQuery]);
+
+  // Set search query instantly for dropdowns, chips, links, or when modal opens
+  const setSearchQueryInstant = (val: string) => {
+    setSearchQuery(val);
+    setDebouncedSearchQuery(val);
+  };
 
   // Reset or set search query when modal opens
   useEffect(() => {
     if (isOpen) {
-      setSearchQuery(initialRepQuery || '');
+      setSearchQueryInstant(initialRepQuery || '');
       setActiveTab(initialMode || 'rep');
+      setRepFilterMode('all');
     }
   }, [isOpen, initialRepQuery, initialMode]);
 
-  // Index Sheets directly (supports fast lookup even before full matching)
+  // Index Sheets directly for ultra-fast lookup with ZERO duplicates & ZERO lag
   const sheet2Index = useMemo(() => {
-    const machineToRepsMap = new Map<string, Array<{ account: string; name: string; type: 'payment' | 'cash' }>>();
-    const repToMachinesMap = new Map<string, { account: string; name: string; machines: Array<{ machine: string; type: 'payment' | 'cash' }> }>();
+    interface RepMachineOccurrence {
+      occurrenceId: string;
+      machine: string;
+      cleanMachine: string;
+      type: 'payment' | 'cash';
+      sheetSource: 'payments' | 'cash';
+      repAccount: string;
+      repName: string;
+      occurrenceIndex: number;
+      totalForMachine: number;
+      rowNumber: number;
+    }
+
+    interface RepMachineItem {
+      machine: string;
+      cleanMachine: string;
+      cashDisplayMachine: string;
+      paymentDisplayMachine: string;
+      type: 'payment' | 'cash' | 'both';
+      paymentCount: number;
+      cashCount: number;
+      totalOccurrences: number;
+      occurrences: RepMachineOccurrence[];
+    }
+
+    interface RepIndexItem {
+      account: string;
+      name: string;
+      machinesMap: Map<string, RepMachineItem>;
+      allOccurrences: RepMachineOccurrence[];
+    }
+
+    const machineRepsTracker = new Map<string, Map<string, { account: string; name: string; type: 'payment' | 'cash' }>>();
+    const repMap = new Map<string, RepIndexItem>();
+    const repLookupMap = new Map<string, RepIndexItem>();
 
     if ((!sheet2 || sheet2.length === 0) && (!sheet3 || sheet3.length === 0)) {
       return {
-        repList: [],
-        machineList: [],
-        machineToRepsMap,
-        repToMachinesMap,
+        repList: [] as Array<{
+          account: string;
+          name: string;
+          machineCount: number;
+          duplicatedMachinesCount: number;
+          totalLinksCount: number;
+          normAccount: string;
+          normName: string;
+        }>,
+        machineList: [] as Array<{
+          machine: string;
+          repCount: number;
+          reps: Array<{ account: string; name: string; type: 'payment' | 'cash' }>;
+          status: 'single' | 'multi' | 'none';
+        }>,
+        machineToRepsMap: new Map<string, Array<{ account: string; name: string; type: 'payment' | 'cash' }>>(),
+        repLookupMap,
+        repMap,
       };
     }
 
-    // Process Sheet 2 (Payments)
+    // Process Sheet 2 (Payments / Donor 1 / Acceptor 1)
     if (sheet2 && sheet2.length > 0) {
       const sampleRow = sheet2[0];
       const keys = Object.keys(sampleRow);
@@ -188,57 +213,116 @@ export const RepLookupModal: React.FC<RepLookupModalProps> = ({
         : keys.find((k) => /اسم.*مندوب|اسم.*العميل|اسم.*المستخدم|اسم|rep.*name|agent.*name|name/i.test(k))
           || accCol || keys[1] || keys[0];
 
-      sheet2.forEach((row) => {
+      for (let i = 0; i < sheet2.length; i++) {
+        const row = sheet2[i];
         const rawM = row[mCol];
-        if (rawM === undefined || rawM === null || String(rawM).trim() === '') return;
+        if (rawM === undefined || rawM === null || String(rawM).trim() === '') continue;
         const rawMStr = String(rawM).trim();
         const normalizedKey = normalizeMachineId(rawMStr);
-        const displayMachine = normalizedKey; // Payments machines are strictly clean without 7-
+        if (!normalizedKey) continue;
+
+        // Check if raw machine starts with 7- or ٧- (explicit Cash)
+        const isCashRecord = rawMStr.startsWith('7-') || rawMStr.startsWith('٧-');
+        const displayMachine = isCashRecord ? (rawMStr.startsWith('7-') || rawMStr.startsWith('٧-') ? rawMStr : `7-${normalizedKey}`) : normalizedKey;
 
         const rawRep = row[repCol];
         const rawAcc = accCol && row[accCol] !== undefined ? String(row[accCol]).trim() : '';
-        
+
         const repName = rawRep !== undefined && rawRep !== null && String(rawRep).trim() !== ''
           ? String(rawRep).trim()
           : (rawAcc ? `مندوب (${rawAcc})` : 'لا يوجد مندوب');
 
         const accVal = rawAcc || 'غير متوفر';
+        const normAcc = accVal !== 'غير متوفر' ? normalizeText(accVal) : '';
+        const normName = repName && repName !== 'لا يوجد مندوب' ? normalizeText(repName) : '';
 
-        // Index by machine
-        if (!machineToRepsMap.has(normalizedKey)) {
-          machineToRepsMap.set(normalizedKey, []);
+        const recordType: 'payment' | 'cash' = isCashRecord ? 'cash' : 'payment';
+
+        // 1. Index by machine: track UNIQUE reps only on this machine
+        let mTracker = machineRepsTracker.get(normalizedKey);
+        if (!mTracker) {
+          mTracker = new Map();
+          machineRepsTracker.set(normalizedKey, mTracker);
         }
-        machineToRepsMap.get(normalizedKey)!.push({ account: accVal, name: repName, type: 'payment' });
+        const repDedupeKey = `${normAcc || 'noacc'}__${normName || 'noname'}__${recordType}`;
+        if (!mTracker.has(repDedupeKey)) {
+          mTracker.set(repDedupeKey, { account: accVal, name: repName, type: recordType });
+        }
 
-        // Index by rep (preserve every instance and unify across sheets)
-        if (accVal !== 'غير متوفر' || (repName && repName !== 'لا يوجد مندوب')) {
-          const normAccKey = accVal !== 'غير متوفر' ? normalizeText(accVal) : '';
-          const normNameKey = repName ? normalizeText(repName) : '';
-          const repKey = normAccKey || normNameKey;
-
-          if (!repToMachinesMap.has(repKey)) {
-            repToMachinesMap.set(repKey, { account: accVal, name: repName, machines: [] });
+        // 2. Index by rep: track machines and duplicate occurrences for this rep
+        const repPrimaryId = normAcc || normName;
+        if (repPrimaryId) {
+          let repObj = repMap.get(repPrimaryId);
+          if (!repObj) {
+            repObj = {
+              account: accVal,
+              name: repName,
+              machinesMap: new Map(),
+              allOccurrences: [],
+            };
+            repMap.set(repPrimaryId, repObj);
           }
-          const repInfo = repToMachinesMap.get(repKey)!;
-          if (accVal !== 'غير متوفر' && (repInfo.account === 'غير متوفر' || !repInfo.account)) {
-            repInfo.account = accVal;
+          if (accVal !== 'غير متوفر' && (repObj.account === 'غير متوفر' || !repObj.account)) {
+            repObj.account = accVal;
           }
           if (repName && !repName.startsWith('مندوب (') && !repName.startsWith('مسؤول كاش (')) {
-            repInfo.name = repName;
+            repObj.name = repName;
           }
-          repInfo.machines.push({ machine: displayMachine, type: 'payment' });
 
-          // Also map secondary key if both account and name exist
-          if (normAccKey && normNameKey && normNameKey !== normAccKey) {
-            if (!repToMachinesMap.has(normNameKey)) {
-              repToMachinesMap.set(normNameKey, repInfo);
+          // Add or increment machine occurrence in rep's unique map
+          let existingMachine = repObj.machinesMap.get(normalizedKey);
+          if (!existingMachine) {
+            existingMachine = {
+              machine: displayMachine,
+              cleanMachine: normalizedKey,
+              cashDisplayMachine: `7-${normalizedKey}`,
+              paymentDisplayMachine: normalizedKey,
+              type: recordType,
+              paymentCount: isCashRecord ? 0 : 1,
+              cashCount: isCashRecord ? 1 : 0,
+              totalOccurrences: 1,
+              occurrences: [],
+            };
+            repObj.machinesMap.set(normalizedKey, existingMachine);
+          } else {
+            if (isCashRecord) {
+              existingMachine.cashCount += 1;
+            } else {
+              existingMachine.paymentCount += 1;
+            }
+            existingMachine.totalOccurrences += 1;
+            if (existingMachine.paymentCount > 0 && existingMachine.cashCount > 0) {
+              existingMachine.type = 'both';
             }
           }
+
+          const currentOccIndex = existingMachine.occurrences.length + 1;
+          const occurrenceObj: RepMachineOccurrence = {
+            occurrenceId: `sheet2-${i + 1}-${normalizedKey}-${currentOccIndex}`,
+            machine: displayMachine,
+            cleanMachine: normalizedKey,
+            type: recordType,
+            sheetSource: isCashRecord ? 'cash' : 'payments',
+            repAccount: accVal,
+            repName,
+            occurrenceIndex: currentOccIndex,
+            totalForMachine: existingMachine.totalOccurrences,
+            rowNumber: i + 1,
+          };
+          existingMachine.occurrences.push(occurrenceObj);
+          repObj.allOccurrences.push(occurrenceObj);
+
+          if (normAcc && !repLookupMap.has(normAcc)) {
+            repLookupMap.set(normAcc, repObj);
+          }
+          if (normName && !repLookupMap.has(normName)) {
+            repLookupMap.set(normName, repObj);
+          }
         }
-      });
+      }
     }
 
-    // Process Sheet 3 (Cash)
+    // Process Sheet 3 (Cash / Donor 2 / Acceptor 2)
     if (sheet3 && sheet3.length > 0) {
       const sampleRow3 = sheet3[0];
       const keys3 = Object.keys(sampleRow3);
@@ -259,11 +343,15 @@ export const RepLookupModal: React.FC<RepLookupModalProps> = ({
         : keys3.find((k) => /اسم.*مندوب|اسم.*العميل|اسم.*المستخدم|اسم|rep.*name|agent.*name|name/i.test(k))
           || accCol3 || keys3[1] || keys3[0];
 
-      sheet3.forEach((row) => {
+      for (let i = 0; i < sheet3.length; i++) {
+        const row = sheet3[i];
         const rawM = row[mCol3];
-        if (rawM === undefined || rawM === null || String(rawM).trim() === '') return;
+        if (rawM === undefined || rawM === null || String(rawM).trim() === '') continue;
         const rawMStr = String(rawM).trim();
         const normalizedKey = normalizeMachineId(rawMStr);
+        if (!normalizedKey) continue;
+
+        // Cash machines MUST have 7- prefix
         const displayMachine = rawMStr.startsWith('7-') || rawMStr.startsWith('٧-') ? rawMStr : `7-${normalizedKey}`;
 
         const rawRep = row[repCol3];
@@ -274,85 +362,145 @@ export const RepLookupModal: React.FC<RepLookupModalProps> = ({
           : (rawAcc ? `مسؤول كاش (${rawAcc})` : 'لا يوجد مسؤول كاش');
 
         const accVal = rawAcc || 'غير متوفر';
+        const normAcc = accVal !== 'غير متوفر' ? normalizeText(accVal) : '';
+        const normName = repName && repName !== 'لا يوجد مسؤول كاش' ? normalizeText(repName) : '';
 
-        // Index by machine
-        if (!machineToRepsMap.has(normalizedKey)) {
-          machineToRepsMap.set(normalizedKey, []);
+        // 1. Index by machine: track UNIQUE reps only on this machine
+        let mTracker = machineRepsTracker.get(normalizedKey);
+        if (!mTracker) {
+          mTracker = new Map();
+          machineRepsTracker.set(normalizedKey, mTracker);
         }
-        machineToRepsMap.get(normalizedKey)!.push({ account: accVal, name: repName, type: 'cash' });
+        const repDedupeKey = `${normAcc || 'noacc'}__${normName || 'noname'}__cash`;
+        if (!mTracker.has(repDedupeKey)) {
+          mTracker.set(repDedupeKey, { account: accVal, name: repName, type: 'cash' });
+        }
 
-        // Index by rep (preserve every instance and unify with payments)
-        if (accVal !== 'غير متوفر' || (repName && repName !== 'لا يوجد مسؤول كاش')) {
-          const normAccKey = accVal !== 'غير متوفر' ? normalizeText(accVal) : '';
-          const normNameKey = repName ? normalizeText(repName) : '';
-          const repKey = normAccKey || normNameKey;
-
-          if (!repToMachinesMap.has(repKey)) {
-            repToMachinesMap.set(repKey, { account: accVal, name: repName, machines: [] });
+        // 2. Index by rep: track machines and duplicate occurrences for this rep
+        const repPrimaryId = normAcc || normName;
+        if (repPrimaryId) {
+          let repObj = repMap.get(repPrimaryId);
+          if (!repObj) {
+            repObj = {
+              account: accVal,
+              name: repName,
+              machinesMap: new Map(),
+              allOccurrences: [],
+            };
+            repMap.set(repPrimaryId, repObj);
           }
-          const repInfo = repToMachinesMap.get(repKey)!;
-          if (accVal !== 'غير متوفر' && (repInfo.account === 'غير متوفر' || !repInfo.account)) {
-            repInfo.account = accVal;
+          if (accVal !== 'غير متوفر' && (repObj.account === 'غير متوفر' || !repObj.account)) {
+            repObj.account = accVal;
           }
           if (repName && !repName.startsWith('مسؤول كاش (') && !repName.startsWith('مندوب (')) {
-            repInfo.name = repName;
+            repObj.name = repName;
           }
-          repInfo.machines.push({ machine: displayMachine, type: 'cash' });
 
-          // Also map secondary key if both account and name exist
-          if (normAccKey && normNameKey && normNameKey !== normAccKey) {
-            if (!repToMachinesMap.has(normNameKey)) {
-              repToMachinesMap.set(normNameKey, repInfo);
+          // Add or increment machine occurrence in rep's unique map
+          let existingMachine = repObj.machinesMap.get(normalizedKey);
+          if (!existingMachine) {
+            existingMachine = {
+              machine: displayMachine,
+              cleanMachine: normalizedKey,
+              cashDisplayMachine: `7-${normalizedKey}`,
+              paymentDisplayMachine: normalizedKey,
+              type: 'cash',
+              paymentCount: 0,
+              cashCount: 1,
+              totalOccurrences: 1,
+              occurrences: [],
+            };
+            repObj.machinesMap.set(normalizedKey, existingMachine);
+          } else {
+            existingMachine.cashCount += 1;
+            existingMachine.totalOccurrences += 1;
+            if (existingMachine.paymentCount > 0) {
+              existingMachine.type = 'both';
             }
           }
+
+          const currentOccIndex = existingMachine.occurrences.length + 1;
+          const occurrenceObj: RepMachineOccurrence = {
+            occurrenceId: `sheet3-${i + 1}-${normalizedKey}-${currentOccIndex}`,
+            machine: displayMachine,
+            cleanMachine: normalizedKey,
+            type: 'cash',
+            sheetSource: 'cash',
+            repAccount: accVal,
+            repName,
+            occurrenceIndex: currentOccIndex,
+            totalForMachine: existingMachine.totalOccurrences,
+            rowNumber: i + 1,
+          };
+          existingMachine.occurrences.push(occurrenceObj);
+          repObj.allOccurrences.push(occurrenceObj);
+
+          if (normAcc && !repLookupMap.has(normAcc)) {
+            repLookupMap.set(normAcc, repObj);
+          }
+          if (normName && !repLookupMap.has(normName)) {
+            repLookupMap.set(normName, repObj);
+          }
         }
-      });
+      }
     }
 
-    const uniqueRepValues = Array.from(new Set(Array.from(repToMachinesMap.values())));
-    const repList = uniqueRepValues.map((r) => ({
-      account: r.account,
-      name: r.name,
-      machineCount: r.machines.length,
-      type: r.machines.some((m) => m.type === 'cash') ? ('cash' as const) : ('payment' as const),
-    })).sort((a, b) => b.machineCount - a.machineCount);
+    // Finalize machineToRepsMap with clean unique arrays
+    const machineToRepsMap = new Map<string, Array<{ account: string; name: string; type: 'payment' | 'cash' }>>();
+    for (const [mId, tracker] of machineRepsTracker.entries()) {
+      machineToRepsMap.set(mId, Array.from(tracker.values()));
+    }
 
+    // Update occurrences total count in all occurrences
+    for (const repObj of repMap.values()) {
+      for (const occ of repObj.allOccurrences) {
+        const mObj = repObj.machinesMap.get(occ.cleanMachine);
+        if (mObj) {
+          occ.totalForMachine = mObj.totalOccurrences;
+        }
+      }
+    }
+
+    // Finalize distinct representatives list
+    const repList = Array.from(repMap.values()).map((r) => {
+      const machines = Array.from(r.machinesMap.values());
+      const duplicatedMachinesCount = machines.filter((m) => m.totalOccurrences > 1).length;
+      const totalLinksCount = r.allOccurrences.length || machines.reduce((sum, m) => sum + m.totalOccurrences, 0);
+      return {
+        account: r.account,
+        name: r.name,
+        machineCount: machines.length,
+        duplicatedMachinesCount,
+        totalLinksCount,
+        machines,
+        allOccurrences: r.allOccurrences,
+        normAccount: normalizeText(r.account),
+        normName: normalizeText(r.name),
+      };
+    }).sort((a, b) => b.totalLinksCount - a.totalLinksCount);
+
+    // Finalize machineList
     const machineList = Array.from(machineToRepsMap.entries()).map(([mKey, reps]) => {
       const norm = normalizeMachineId(mKey);
-      const isPureCash = reps.length > 0 && reps.every(r => r.type === 'cash');
-      const displayMachine = isPureCash 
+      const isPureCash = reps.length > 0 && reps.every((r) => r.type === 'cash');
+      const displayMachine = isPureCash
         ? (norm.startsWith('7-') || norm.startsWith('٧-') ? norm : `7-${norm}`)
         : norm;
       return {
         machine: displayMachine,
         repCount: reps.length,
         reps,
-        status: reps.length === 1 ? 'single' : reps.length > 1 ? 'multi' : 'none' as 'single' | 'multi' | 'none',
+        status: reps.length === 1 ? ('single' as const) : reps.length > 1 ? ('multi' as const) : ('none' as const),
       };
     }).sort((a, b) => b.repCount - a.repCount);
 
-    return { repList, machineList, machineToRepsMap, repToMachinesMap };
+    return { repList, machineList, machineToRepsMap, repLookupMap, repMap };
   }, [sheet2, sheet3, colM2, colM3, colAcc, colRep, colCashAcc, colCashRep]);
 
-  // Unique Reps for dropdown & chips
+  // Unique Reps for dropdown & chips (Fast direct reference)
   const uniqueReps = useMemo(() => {
-    if (expandedRows && expandedRows.length > 0) {
-      const map = new Map<string, { account: string; name: string; machineCount: number }>();
-      expandedRows.forEach((row) => {
-        if (row.status === 'none') return;
-        const accKey = row.account.trim().toLowerCase();
-        const nameVal = row.repName.trim();
-        if (accKey === 'غير متوفر' && nameVal === 'لا يوجد مندوب') return;
-
-        if (!map.has(accKey)) {
-          map.set(accKey, { account: row.account, name: nameVal, machineCount: 0 });
-        }
-        map.get(accKey)!.machineCount += 1;
-      });
-      return Array.from(map.values()).sort((a, b) => b.machineCount - a.machineCount);
-    }
     return sheet2Index.repList;
-  }, [expandedRows, sheet2Index]);
+  }, [sheet2Index]);
 
   // Unique Machines for dropdown & chips
   const uniqueMachines = useMemo(() => {
@@ -380,24 +528,24 @@ export const RepLookupModal: React.FC<RepLookupModalProps> = ({
 
   // Performance Optimization: Dynamic search filter with a maximum of 100 options in the DOM at once
   const filteredDropdownReps = useMemo(() => {
-    if (!searchQuery.trim()) {
+    if (!debouncedSearchQuery.trim()) {
       return uniqueReps.slice(0, 100); // Show top 100 by machine count
     }
-    const q = searchQuery.toLowerCase().trim();
+    const q = debouncedSearchQuery.toLowerCase().trim();
     return uniqueReps
       .filter((r) => r.name.toLowerCase().includes(q) || r.account.toLowerCase().includes(q))
       .slice(0, 100);
-  }, [uniqueReps, searchQuery]);
+  }, [uniqueReps, debouncedSearchQuery]);
 
   const filteredDropdownMachines = useMemo(() => {
-    if (!searchQuery.trim()) {
+    if (!debouncedSearchQuery.trim()) {
       return uniqueMachines.slice(0, 100);
     }
-    const q = searchQuery.toLowerCase().trim();
+    const q = debouncedSearchQuery.toLowerCase().trim();
     return uniqueMachines
       .filter((m) => m.machine.toLowerCase().includes(q))
       .slice(0, 100);
-  }, [uniqueMachines, searchQuery]);
+  }, [uniqueMachines, debouncedSearchQuery]);
 
   // Clean chips for reps (excluding "لا يوجد مندوب" placeholders)
   const repQuickChips = useMemo(() => {
@@ -411,241 +559,153 @@ export const RepLookupModal: React.FC<RepLookupModalProps> = ({
     return uniqueMachines.slice(0, 8);
   }, [uniqueMachines]);
 
-  // Representative Matched Data
+  // Representative Matched Data (Ultra-fast direct lookup)
   const matchedRepData = useMemo(() => {
-    if (!searchQuery.trim() || activeTab !== 'rep') {
+    if (!debouncedSearchQuery.trim() || activeTab !== 'rep') {
       return null;
     }
 
-    const q = searchQuery.trim().toLowerCase();
-    const qNorm = q
-      .replace(/[\u200B-\u200D\uFEFF\u00A0]/g, '')
-      .replace(/[٠-٩]/g, (d) => String('٠١٢٣٤٥٦٧٨٩'.indexOf(d)));
+    const q = debouncedSearchQuery.trim().toLowerCase();
+    const qNorm = normalizeText(q);
+    if (!qNorm) return null;
 
-    // Gather all matching reps from sheet2Index.repToMachinesMap
-    const matchedEntries: Array<{
-      account: string;
-      name: string;
-      machines: Array<{ machine: string; type: 'payment' | 'cash' }>;
-    }> = [];
+    // 1. Direct O(1) exact match
+    let matchedItem = sheet2Index.repLookupMap.get(qNorm);
 
-    const matchedRepKeys = new Set<string>();
-
-    for (const [key, val] of sheet2Index.repToMachinesMap.entries()) {
-      const keyNorm = key
-        .replace(/[\u200B-\u200D\uFEFF\u00A0]/g, '')
-        .replace(/[٠-٩]/g, (d) => String('٠١٢٣٤٥٦٧٨٩'.indexOf(d)));
-      const accNorm = val.account
-        .toLowerCase()
-        .replace(/[\u200B-\u200D\uFEFF\u00A0]/g, '')
-        .replace(/[٠-٩]/g, (d) => String('٠١٢٣٤٥٦٧٨٩'.indexOf(d)));
-      const nameNorm = val.name
-        .toLowerCase()
-        .replace(/[\u200B-\u200D\uFEFF\u00A0]/g, '')
-        .replace(/[٠-٩]/g, (d) => String('٠١٢٣٤٥٦٧٨٩'.indexOf(d)));
-
-      if (keyNorm.includes(qNorm) || accNorm.includes(qNorm) || nameNorm.includes(qNorm) || qNorm.includes(accNorm)) {
-        if (!matchedEntries.includes(val)) {
-          matchedEntries.push(val);
-        }
-        if (val.account && val.account !== 'غير متوفر') matchedRepKeys.add(val.account.toLowerCase());
-        if (val.name && val.name !== 'لا يوجد مندوب') matchedRepKeys.add(val.name.toLowerCase());
+    // 2. If not exact hit, search in distinct representatives list
+    if (!matchedItem) {
+      const foundInList = sheet2Index.repList.find(
+        (r) => (r.normAccount && r.normAccount.includes(qNorm)) || (r.normName && r.normName.includes(qNorm))
+      );
+      if (foundInList) {
+        matchedItem = sheet2Index.repMap.get(foundInList.normAccount || foundInList.normName);
       }
     }
 
-    // Also check expandedRows
-    const matchedExpandedRows = (expandedRows || []).filter((r) => {
-      if (r.status === 'none') return false;
-      const accNorm = r.account
-        .toLowerCase()
-        .replace(/[\u200B-\u200D\uFEFF\u00A0]/g, '')
-        .replace(/[٠-٩]/g, (d) => String('٠١٢٣٤٥٦٧٨٩'.indexOf(d)));
-      const nameNorm = r.repName
-        .toLowerCase()
-        .replace(/[\u200B-\u200D\uFEFF\u00A0]/g, '')
-        .replace(/[٠-٩]/g, (d) => String('٠١٢٣٤٥٦٧٨٩'.indexOf(d)));
-
-      const isMatch =
-        accNorm.includes(qNorm) ||
-        nameNorm.includes(qNorm) ||
-        matchedRepKeys.has(r.account.toLowerCase()) ||
-        matchedRepKeys.has(r.repName.toLowerCase());
-
-      if (isMatch) {
-        if (r.account && r.account !== 'غير متوفر') matchedRepKeys.add(r.account.toLowerCase());
-        if (r.repName && r.repName !== 'لا يوجد مندوب') matchedRepKeys.add(r.repName.toLowerCase());
-      }
-      return isMatch;
-    });
-
-    if (matchedEntries.length === 0 && matchedExpandedRows.length === 0) {
-      return null;
-    }
-
-    // Determine primary rep name and account
-    const primaryAccount =
-      matchedEntries.find((e) => e.account && e.account !== 'غير متوفر')?.account ||
-      matchedExpandedRows.find((r) => r.account && r.account !== 'غير متوفر')?.account ||
-      searchQuery.trim();
-
-    const primaryName =
-      matchedEntries.find((e) => e.name && e.name !== 'لا يوجد مندوب' && e.name !== 'لا يوجد مسؤول كاش')?.name ||
-      matchedExpandedRows.find((r) => r.repName && r.repName !== 'لا يوجد مندوب')?.repName ||
-      `مندوب (${primaryAccount})`;
-
-    // Build the complete list of machines for this rep (Both Cash and Payments!)
-    const machinesList: Array<{
-      machine: string;
-      type: 'payment' | 'cash';
-      totalRepsOnMachine: number;
-      sameRepOccurrences: number;
-      repAccount: string;
-      repName: string;
-      otherReps: Array<{ account: string; name: string; type?: 'payment' | 'cash' }>;
-      status: 'single' | 'multi' | 'none';
-    }> = [];
-
-    const seenMachineKey = new Set<string>();
-
-    // 1. First add from matchedExpandedRows (reconciled records with Sheet 1)
-    matchedExpandedRows.forEach((row) => {
-      const cleanId = normalizeMachineId(row.machine);
-      const isCash = row.type === 'cash';
-      const displayMachine = isCash
-        ? (cleanId.startsWith('7-') || cleanId.startsWith('٧-') ? cleanId : `7-${cleanId}`)
-        : cleanId;
-      const dedupKey = `${displayMachine}__${row.type}__${row.id}`;
-
-      if (!seenMachineKey.has(dedupKey)) {
-        seenMachineKey.add(dedupKey);
-
-        const normKey = normalizeMachineId(row.machine);
-        const mSummary = (machinesResults || []).find((mr) => normalizeMachineId(mr.machine) === normKey);
-        const allRepsOnMachine = mSummary?.reps || sheet2Index.machineToRepsMap.get(normKey) || [];
-
-        const cleanCurrentAcc = normalizeText(row.account);
-        const sameRepOccurrences = allRepsOnMachine.filter(
-          (r) => (cleanCurrentAcc && cleanCurrentAcc !== 'غير متوفر' && normalizeText(r.account) === cleanCurrentAcc) ||
-                 (r.name && r.name === row.repName)
-        ).length;
-
-        const otherReps = allRepsOnMachine.filter(
-          (r) => (cleanCurrentAcc && cleanCurrentAcc !== 'غير متوفر' ? normalizeText(r.account) !== cleanCurrentAcc : r.name !== row.repName)
-        );
-
-        machinesList.push({
-          machine: displayMachine,
-          type: isCash ? 'cash' : 'payment',
-          totalRepsOnMachine: Math.max(row.totalRepsForMachine, allRepsOnMachine.length, 1),
-          sameRepOccurrences: Math.max(sameRepOccurrences, 1),
-          repAccount: row.account,
-          repName: row.repName,
-          otherReps,
-          status: row.status,
-        });
-      }
-    });
-
-    // 2. Also add any machines from matchedEntries (from Sheet 2 and Sheet 3) not already in machinesList
-    matchedEntries.forEach((entry) => {
-      entry.machines.forEach((mObj) => {
-        const cleanId = normalizeMachineId(mObj.machine);
-        const isCash = mObj.type === 'cash';
-        const displayMachine = isCash
-          ? (cleanId.startsWith('7-') || cleanId.startsWith('٧-') ? cleanId : `7-${cleanId}`)
-          : cleanId;
-
-        // Check if already included in machinesList
-        const alreadyIncluded = machinesList.some(
-          (m) => normalizeMachineId(m.machine) === cleanId && m.type === mObj.type
-        );
-
-        if (!alreadyIncluded) {
-          const normKey = normalizeMachineId(mObj.machine);
-          const allRepsOnMachine = sheet2Index.machineToRepsMap.get(normKey) || [
-            { account: entry.account, name: entry.name, type: mObj.type }
-          ];
-
-          const cleanCurrentAcc = normalizeText(entry.account);
-          const sameRepOccurrences = allRepsOnMachine.filter(
-            (r) => (cleanCurrentAcc && cleanCurrentAcc !== 'غير متوفر' && normalizeText(r.account) === cleanCurrentAcc) ||
-                   (r.name && r.name === entry.name)
-          ).length;
-
-          const otherReps = allRepsOnMachine.filter(
-            (r) => (cleanCurrentAcc && cleanCurrentAcc !== 'غير متوفر' ? normalizeText(r.account) !== cleanCurrentAcc : r.name !== entry.name)
-          );
-
-          machinesList.push({
-            machine: displayMachine,
-            type: isCash ? 'cash' : 'payment',
-            totalRepsOnMachine: Math.max(allRepsOnMachine.length, 1),
-            sameRepOccurrences: Math.max(sameRepOccurrences, 1),
-            repAccount: entry.account,
-            repName: entry.name,
-            otherReps,
-            status: allRepsOnMachine.length > 1 ? 'multi' : 'single',
-          });
-        }
+    // 3. Fallback check in expandedRows if present
+    if (!matchedItem && expandedRows && expandedRows.length > 0) {
+      const foundRow = expandedRows.find((r) => {
+        if (r.status === 'none') return false;
+        const accNorm = r.account !== 'غير متوفر' ? normalizeText(r.account) : '';
+        const nameNorm = r.repName && r.repName !== 'لا يوجد مندوب' ? normalizeText(r.repName) : '';
+        return (accNorm && accNorm.includes(qNorm)) || (nameNorm && nameNorm.includes(qNorm));
       });
+      if (foundRow) {
+        const foundAcc = normalizeText(foundRow.account);
+        const foundName = normalizeText(foundRow.repName);
+        matchedItem = sheet2Index.repLookupMap.get(foundAcc) || sheet2Index.repLookupMap.get(foundName);
+      }
+    }
+
+    if (!matchedItem) return null;
+
+    const primaryAccount = matchedItem.account || 'غير متوفر';
+    const primaryName = matchedItem.name || `مندوب (${primaryAccount})`;
+    const cleanCurrentAcc = normalizeText(primaryAccount);
+    const cleanCurrentName = normalizeText(primaryName);
+
+    // Build machines list from the pre-indexed unique machines map
+    const machinesList = Array.from(matchedItem.machinesMap.values()).map((mObj) => {
+      const normKey = normalizeMachineId(mObj.cleanMachine || mObj.machine);
+      const allRepsOnMachine = sheet2Index.machineToRepsMap.get(normKey) || [];
+
+      const otherReps = allRepsOnMachine.filter((r) => {
+        const rAcc = normalizeText(r.account);
+        const rName = normalizeText(r.name);
+        if (cleanCurrentAcc && cleanCurrentAcc !== 'غير متوفر' && rAcc) {
+          return rAcc !== cleanCurrentAcc;
+        }
+        return rName !== cleanCurrentName;
+      });
+
+      const isRepeatedForSameRep = mObj.totalOccurrences > 1;
+
+      // Human-readable repeat details
+      let repeatDescription = '';
+      if (isRepeatedForSameRep) {
+        if (mObj.paymentCount > 0 && mObj.cashCount > 0) {
+          repeatDescription = `كاش ومدفوعات معاً (${mObj.paymentCount} مدفوعات + ${mObj.cashCount} كاش)`;
+        } else if (mObj.paymentCount > 1) {
+          repeatDescription = `مكررة ${mObj.paymentCount} مرات بالمدفوعات`;
+        } else if (mObj.cashCount > 1) {
+          repeatDescription = `مكررة ${mObj.cashCount} مرات بالكاش (7-)`;
+        } else {
+          repeatDescription = `مكررة ${mObj.totalOccurrences} مرات`;
+        }
+      }
+
+      // Exact display label: If pure cash or starting with 7-, show 7- prefix
+      const cleanId = normalizeMachineId(mObj.cleanMachine || mObj.machine);
+      const displayMachine = mObj.type === 'cash'
+        ? (mObj.machine.startsWith('7-') || mObj.machine.startsWith('٧-') ? mObj.machine : `7-${cleanId}`)
+        : (mObj.type === 'both' ? `${cleanId} (7-${cleanId})` : cleanId);
+
+      return {
+        machine: displayMachine,
+        cleanMachine: cleanId,
+        type: mObj.type,
+        paymentCount: mObj.paymentCount,
+        cashCount: mObj.cashCount,
+        sameRepOccurrences: mObj.totalOccurrences,
+        isRepeatedForSameRep,
+        repeatDescription,
+        totalRepsOnMachine: Math.max(allRepsOnMachine.length, 1),
+        repAccount: primaryAccount,
+        repName: primaryName,
+        otherReps,
+        occurrences: mObj.occurrences || [],
+        status: (allRepsOnMachine.length > 1 ? 'multi' : 'single') as 'multi' | 'single',
+      };
     });
 
-    const cashCount = machinesList.filter((m) => m.type === 'cash').length;
-    const paymentsCount = machinesList.filter((m) => m.type === 'payment').length;
+    // Build flattened all occurrences list with full metadata (all sequential rows)
+    const occurrencesList = (matchedItem.allOccurrences || []).map((occ, oIdx) => {
+      const normKey = normalizeMachineId(occ.cleanMachine || occ.machine);
+      const allRepsOnMachine = sheet2Index.machineToRepsMap.get(normKey) || [];
+      const otherReps = allRepsOnMachine.filter((r) => {
+        const rAcc = normalizeText(r.account);
+        const rName = normalizeText(r.name);
+        if (cleanCurrentAcc && cleanCurrentAcc !== 'غير متوفر' && rAcc) {
+          return rAcc !== cleanCurrentAcc;
+        }
+        return rName !== cleanCurrentName;
+      });
+
+      const mParent = matchedItem.machinesMap.get(normKey);
+      const totalOccurrences = mParent ? mParent.totalOccurrences : occ.totalForMachine || 1;
+      const isRepeatedForSameRep = totalOccurrences > 1;
+
+      // Ensure 7- prefix for cash transactions
+      const formattedMachine = occ.type === 'cash'
+        ? (occ.machine.startsWith('7-') || occ.machine.startsWith('٧-') ? occ.machine : `7-${normKey}`)
+        : normKey;
+
+      const otherRepsStr = otherReps.length > 0
+        ? otherReps.map((r) => `${r.name} (${r.account})`).join(' ، ')
+        : 'المندوب الوحيد';
+
+      return {
+        ...occ,
+        id: `occ-${oIdx + 1}-${normKey}`,
+        globalIndex: oIdx + 1,
+        machine: formattedMachine,
+        cleanMachine: normKey,
+        totalForMachine: totalOccurrences,
+        isRepeatedForSameRep,
+        totalRepsOnMachine: Math.max(allRepsOnMachine.length, 1),
+        otherReps,
+        otherRepsStr,
+        repeatDescription: mParent ? mParent.type === 'both' ? 'كاش ومدفوعات' : `مكررة ${totalOccurrences} مرات` : '',
+      };
+    });
+
+    const cashCount = machinesList.reduce((sum, m) => sum + (m.cashCount || (m.type === 'cash' ? 1 : 0)), 0);
+    const paymentsCount = machinesList.reduce((sum, m) => sum + (m.paymentCount || (m.type === 'payment' ? 1 : 0)), 0);
+    const bothCount = machinesList.filter((m) => m.type === 'both').length;
+    const duplicatedForRepCount = machinesList.filter((m) => m.isRepeatedForSameRep).length;
+    const totalLinksForRep = occurrencesList.length || machinesList.reduce((acc, m) => acc + m.sameRepOccurrences, 0);
     const soleCount = machinesList.filter((m) => m.totalRepsOnMachine === 1).length;
     const sharedCount = machinesList.filter((m) => m.totalRepsOnMachine > 1).length;
-
-    // Filter sheet2 and sheet3 rows to calculate exact financial sums
-    const matchedSheet2Rows = (sheet2 || []).filter(row => {
-      const sampleRow = row;
-      const keys = Object.keys(sampleRow);
-      
-      const accCol = colAcc && sampleRow[colAcc] !== undefined
-        ? colAcc
-        : keys.find((k) => /^(doner1|donor1|doner_1|donor_1|doner 1|donor 1|doner|donor|رقم حساب المدفوعات|حساب المدفوعات)$/i.test(k))
-          || keys.find((k) => /(doner.*1|donor.*1|^doner$|^donor$|حساب.*مدفوعات|رقم.*المدفوعات)/i.test(k))
-          || keys.find((k) => /حساب|كود|رقم.*مندوب|account|acc|code|doner|donor/i.test(k)) || '';
-
-      const repCol = colRep && sampleRow[colRep] !== undefined
-        ? colRep
-        : keys.find((k) => /اسم.*مندوب|اسم.*العميل|اسم.*المستخدم|اسم|rep.*name|agent.*name|name/i.test(k))
-          || accCol || keys[1] || keys[0];
-
-      const accVal = accCol && row[accCol] !== undefined ? String(row[accCol]).trim() : '';
-      const repName = row[repCol] !== undefined && row[repCol] !== null ? String(row[repCol]).trim() : '';
-
-      const accNorm = accVal.toLowerCase().replace(/[\u200B-\u200D\uFEFF\u00A0]/g, '').replace(/[٠-٩]/g, (d) => String('٠١٢٣٤٥٦٧٨٩'.indexOf(d)));
-      const nameNorm = repName.toLowerCase().replace(/[\u200B-\u200D\uFEFF\u00A0]/g, '').replace(/[٠-٩]/g, (d) => String('٠١٢٣٤٥٦٧٨٩'.indexOf(d)));
-
-      return accNorm.includes(qNorm) || nameNorm.includes(qNorm) || qNorm.includes(accNorm);
-    });
-
-    const matchedSheet3Rows = (sheet3 || []).filter(row => {
-      const sampleRow = row;
-      const keys = Object.keys(sampleRow);
-
-      const accCol3 = colCashAcc && sampleRow[colCashAcc] !== undefined
-        ? colCashAcc
-        : keys.find((k) => /^(doner2|donor2|doner_2|donor_2|doner 2|donor 2|رقم الكاش المدفوعات|رقم الكاش|حساب الكاش)$/i.test(k))
-          || keys.find((k) => /(doner.*2|donor.*2|كاش.*مدفوعات|رقم.*الكاش|حساب.*الكاش)/i.test(k))
-          || keys.find((k) => /حساب|كود|رقم.*مندوب|account|acc|code|doner|donor/i.test(k)) || '';
-
-      const repCol3 = colCashRep && sampleRow[colCashRep] !== undefined
-        ? colCashRep
-        : keys.find((k) => /اسم.*مندوب|اسم.*العميل|اسم.*المستخدم|اسم|rep.*name|agent.*name|name/i.test(k))
-          || accCol3 || keys[1] || keys[0];
-
-      const accVal = accCol3 && row[accCol3] !== undefined ? String(row[accCol3]).trim() : '';
-      const repName = row[repCol3] !== undefined && row[repCol3] !== null ? String(row[repCol3]).trim() : '';
-
-      const accNorm = accVal.toLowerCase().replace(/[\u200B-\u200D\uFEFF\u00A0]/g, '').replace(/[٠-٩]/g, (d) => String('٠١٢٣٤٥٦٧٨٩'.indexOf(d)));
-      const nameNorm = repName.toLowerCase().replace(/[\u200B-\u200D\uFEFF\u00A0]/g, '').replace(/[٠-٩]/g, (d) => String('٠١٢٣٤٥٦٧٨٩'.indexOf(d)));
-
-      return accNorm.includes(qNorm) || nameNorm.includes(qNorm) || qNorm.includes(accNorm);
-    });
-
-    const totalPaymentsAmount = sumFinancialColumns(matchedSheet2Rows, ['مبلغ', 'قيمة', 'القيمة', 'رصيد', 'صافي', 'الصافي', 'المدفوع', 'المدفوعات', 'القيمه', 'حركة', 'الحركات', 'amount', 'value', 'total', 'net', 'pay', 'sum', 'balance']);
-    const totalCashAmount = sumFinancialColumns(matchedSheet3Rows, ['مبلغ', 'قيمة', 'القيمة', 'رصيد', 'صافي', 'الصافي', 'الكاش', 'كاش', 'القيمه', 'حركة', 'الحركات', 'amount', 'value', 'total', 'net', 'cash', 'sum', 'balance']);
 
     return {
       repInfo: {
@@ -654,27 +714,81 @@ export const RepLookupModal: React.FC<RepLookupModalProps> = ({
         totalMachines: machinesList.length,
         cashCount,
         paymentsCount,
+        bothCount,
+        duplicatedForRepCount,
+        totalLinksForRep,
         soleCount,
         sharedCount,
-        totalPaymentsAmount,
-        totalCashAmount,
-        totalOverallAmount: totalPaymentsAmount + totalCashAmount,
       },
       machines: machinesList,
+      allOccurrences: occurrencesList,
     };
-  }, [searchQuery, activeTab, expandedRows, machinesResults, sheet2Index, sheet2, sheet3, colAcc, colRep, colCashAcc, colCashRep]);
+  }, [debouncedSearchQuery, activeTab, expandedRows, sheet2Index]);
+
+  // Filtered Unique Machines for current Rep view mode
+  const filteredRepMachines = useMemo(() => {
+    if (!matchedRepData) return [];
+    const list = matchedRepData.machines;
+    switch (repFilterMode) {
+      case 'duplicated':
+        return list.filter((m) => m.isRepeatedForSameRep);
+      case 'cash':
+        return list.filter((m) => m.cashCount > 0 || m.type === 'cash' || m.type === 'both' || m.machine.startsWith('7-') || m.machine.startsWith('٧-'));
+      case 'payment':
+        return list.filter((m) => m.paymentCount > 0 || m.type === 'payment' || m.type === 'both');
+      case 'both':
+        return list.filter((m) => m.type === 'both');
+      case 'shared':
+        return list.filter((m) => m.totalRepsOnMachine > 1);
+      default:
+        return list;
+    }
+  }, [matchedRepData, repFilterMode]);
+
+  // Filtered Sequential Occurrences (All Rows under each other)
+  const filteredRepOccurrences = useMemo(() => {
+    if (!matchedRepData) return [];
+    const list = matchedRepData.allOccurrences;
+    switch (repFilterMode) {
+      case 'duplicated':
+        return list.filter((o) => o.isRepeatedForSameRep);
+      case 'cash':
+        return list.filter((o) => o.type === 'cash' || o.machine.startsWith('7-') || o.machine.startsWith('٧-'));
+      case 'payment':
+        return list.filter((o) => o.type === 'payment');
+      case 'both':
+        return list.filter((o) => o.totalForMachine > 1);
+      case 'shared':
+        return list.filter((o) => o.totalRepsOnMachine > 1);
+      default:
+        return list;
+    }
+  }, [matchedRepData, repFilterMode]);
 
   // Machine Matched Data (الاستعلام عن ماكينة معينة)
   const matchedMachineData = useMemo(() => {
-    if (!searchQuery.trim() || activeTab !== 'machine') {
+    if (!debouncedSearchQuery.trim() || activeTab !== 'machine') {
       return null;
     }
 
-    const q = searchQuery.trim().toLowerCase();
+    const q = debouncedSearchQuery.trim().toLowerCase();
+    const qNorm = normalizeMachineId(q);
+
+    // Direct O(1) map lookup
+    if (sheet2Index.machineToRepsMap.has(qNorm)) {
+      const reps = sheet2Index.machineToRepsMap.get(qNorm)!;
+      const isPureCash = reps.length > 0 && reps.every((r) => r.type === 'cash');
+      const displayMachine = isPureCash ? (qNorm.startsWith('7-') ? qNorm : `7-${qNorm}`) : qNorm;
+      return {
+        machine: displayMachine,
+        repCount: reps.length,
+        status: reps.length === 1 ? 'single' : reps.length > 1 ? 'multi' : 'none' as const,
+        reps: reps.map((r) => ({ account: r.account, name: r.name, type: r.type })),
+      };
+    }
 
     // CASE 1: Using machinesResults
     if (machinesResults && machinesResults.length > 0) {
-      const qNorm = normalizeMachineId(q);
       const found = machinesResults.find(
         (m) => m.machine.toLowerCase().includes(q) || normalizeMachineId(m.machine).toLowerCase().includes(qNorm)
       );
@@ -691,9 +805,8 @@ export const RepLookupModal: React.FC<RepLookupModalProps> = ({
       }
     }
 
-    // CASE 2: Using sheet2 index / sheet1
+    // CASE 2: Fallback prefix/contains loop
     if (sheet2Index.machineToRepsMap.size > 0 || sheet1.length > 0) {
-      const qNorm = normalizeMachineId(q);
       for (const [mId, reps] of sheet2Index.machineToRepsMap.entries()) {
         const norm = normalizeMachineId(mId);
         if (mId.toLowerCase().includes(q) || norm.toLowerCase().includes(qNorm)) {
@@ -710,7 +823,7 @@ export const RepLookupModal: React.FC<RepLookupModalProps> = ({
     }
 
     return null;
-  }, [searchQuery, activeTab, machinesResults, sheet2Index, sheet1]);
+  }, [debouncedSearchQuery, activeTab, machinesResults, sheet2Index, sheet1]);
 
   if (!isOpen) return null;
 
@@ -720,34 +833,125 @@ export const RepLookupModal: React.FC<RepLookupModalProps> = ({
 
   // Export representative statement to Excel
   const exportRepStatement = () => {
-    if (!matchedRepData || !matchedRepData.machines.length) return;
+    if (!matchedRepData || (!matchedRepData.machines.length && !matchedRepData.allOccurrences.length)) return;
 
     const rep = matchedRepData.repInfo;
-    const data: (string | number)[][] = [
-      ['كشف الماكينات المربوطة بالمندوب'],
+
+    // Sheet 1: Detailed Sequential Occurrences (All occurrences under each other with 4 rows if 4 links)
+    const occurrencesData: (string | number)[][] = [
+      ['كشف سجلات وارتباطات المندوب المفصلة (جميع الأسطر)'],
       ['اسم المندوب:', rep.name],
       ['رقم الحساب:', rep.account],
-      ['إجمالي الماكينات المربوطة:', rep.totalMachines],
-      ['ماكينات منفردة (خاصة بالمندوب فقط):', rep.soleCount],
-      ['ماكينات مشتركة مع مناديب آخرين:', rep.sharedCount],
+      ['إجمالي عدد الارتباطات والأسطر:', rep.totalLinksForRep],
+      ['إجمالي عدد الماكينات الفريدة:', rep.totalMachines],
+      ['ماكينات مكررة لنفس المندوب:', rep.duplicatedForRepCount],
+      ['سجلات الكاش (7-):', rep.cashCount],
+      ['سجلات المدفوعات:', rep.paymentsCount],
       [],
-      ['م', 'رقم الماكينة', 'حالة الملكية والتعدد', 'الترتيب والتعدد', 'المناديب المشاركون على نفس الماكينة'],
+      [
+        'م',
+        'رقم الماكينة',
+        'نوع الحساب',
+        'ترتيب السجل للمندوب',
+        'إجمالي تكرار الماكينة للمندوب',
+        'تفاصيل نوع الارتباط',
+        'حالة الملكية والتعدد مع الآخرين',
+        'المناديب المشاركون على الماكينة',
+        'رقم حساب المندوب',
+        'اسم المندوب',
+      ],
+    ];
+
+    matchedRepData.allOccurrences.forEach((occ, idx) => {
+      occurrencesData.push([
+        idx + 1,
+        occ.machine,
+        occ.type === 'cash' ? 'كاش (7-)' : 'مدفوعات',
+        `سجل ${occ.occurrenceIndex} من ${occ.totalForMachine}`,
+        occ.totalForMachine > 1 ? `مكررة (${occ.totalForMachine} مرات)` : 'مرة واحدة (غير مكررة)',
+        occ.repeatDescription || (occ.totalForMachine > 1 ? `مكررة ${occ.totalForMachine} مرات` : 'ارتباط مفرد'),
+        occ.totalRepsOnMachine === 1 ? 'خاصة بالمندوب فقط' : `مشتركة (${occ.totalRepsOnMachine} مناديب)`,
+        occ.otherRepsStr,
+        rep.account,
+        rep.name,
+      ]);
+    });
+
+    // Sheet 2: Unique Machines Aggregated Summary
+    const summaryData: (string | number)[][] = [
+      ['ملخص الماكينات المجمعة للمندوب'],
+      ['اسم المندوب:', rep.name],
+      ['رقم الحساب:', rep.account],
+      ['إجمالي الماكينات الفريدة:', rep.totalMachines],
+      ['إجمالي مرات الارتباط:', rep.totalLinksForRep],
+      ['ماكينات مكررة لنفس المندوب:', rep.duplicatedForRepCount],
+      [],
+      [
+        'م',
+        'رقم الماكينة',
+        'نوع الحساب',
+        'تكرار الربط لنفس المندوب',
+        'عدد مرات الارتباط',
+        'تفاصيل التكرار',
+        'حالة الملكية والتعدد مع الآخرين',
+        'المناديب المشاركون على نفس الماكينة',
+      ],
     ];
 
     matchedRepData.machines.forEach((m, idx) => {
       const coRepsStr = m.otherReps.length > 0
         ? m.otherReps.map((r) => `${r.name} (${r.account})`).join(' ، ')
-        : 'لا يوجد مناديب آخرون (المندوب الوحيد لهذه الماكينة)';
+        : 'المندوب الوحيد لهذه الماكينة';
 
-      const stStr = m.totalRepsOnMachine === 1 ? 'خاصة فقط' : `مشتركة (${m.totalRepsOnMachine} مناديب)`;
+      const stStr = m.totalRepsOnMachine === 1 ? 'خاصة بالمندوب فقط' : `مشتركة (${m.totalRepsOnMachine} مناديب)`;
+      const typeStr = m.type === 'both' ? 'كاش ومدفوعات معاً' : m.type === 'cash' ? 'كاش' : 'مدفوعات';
+      const repDedupeStr = m.isRepeatedForSameRep ? `مكررة (${m.sameRepOccurrences} مرات)` : 'مرة واحدة (غير مكررة)';
+      const repDetailStr = m.isRepeatedForSameRep ? m.repeatDescription : 'ارتباط مفرد';
 
-      data.push([idx + 1, m.machine, stStr, `${m.totalRepsOnMachine} مناديب`, coRepsStr]);
+      summaryData.push([
+        idx + 1,
+        m.machine,
+        typeStr,
+        repDedupeStr,
+        m.sameRepOccurrences,
+        repDetailStr,
+        stStr,
+        coRepsStr,
+      ]);
     });
 
     const wb = XLSX.utils.book_new();
-    const ws = XLSX.utils.aoa_to_sheet(data);
-    ws['!cols'] = [{ wch: 6 }, { wch: 22 }, { wch: 22 }, { wch: 18 }, { wch: 50 }];
-    XLSX.utils.book_append_sheet(wb, ws, `ماكينات_${rep.account}`);
+
+    // 1. First Sheet: Detailed Occurrences
+    const ws1 = XLSX.utils.aoa_to_sheet(occurrencesData);
+    ws1['!cols'] = [
+      { wch: 6 },
+      { wch: 22 },
+      { wch: 16 },
+      { wch: 20 },
+      { wch: 24 },
+      { wch: 28 },
+      { wch: 26 },
+      { wch: 45 },
+      { wch: 18 },
+      { wch: 28 },
+    ];
+    XLSX.utils.book_append_sheet(wb, ws1, `كافة_سجلات_${rep.account}`);
+
+    // 2. Second Sheet: Unique Summary
+    const ws2 = XLSX.utils.aoa_to_sheet(summaryData);
+    ws2['!cols'] = [
+      { wch: 6 },
+      { wch: 22 },
+      { wch: 18 },
+      { wch: 24 },
+      { wch: 18 },
+      { wch: 36 },
+      { wch: 24 },
+      { wch: 50 },
+    ];
+    XLSX.utils.book_append_sheet(wb, ws2, `ملخص_الماكينات`);
+
     XLSX.writeFile(wb, `كشف_ماكينات_المندوب_${rep.name}_${rep.account}.xlsx`);
   };
 
@@ -832,7 +1036,7 @@ export const RepLookupModal: React.FC<RepLookupModalProps> = ({
             <button
               onClick={() => {
                 setActiveTab('rep');
-                setSearchQuery('');
+                setSearchQueryInstant('');
               }}
               className={`px-4 py-2 rounded-lg flex items-center gap-2 transition-all cursor-pointer ${
                 activeTab === 'rep'
@@ -847,7 +1051,7 @@ export const RepLookupModal: React.FC<RepLookupModalProps> = ({
             <button
               onClick={() => {
                 setActiveTab('machine');
-                setSearchQuery('');
+                setSearchQueryInstant('');
               }}
               className={`px-4 py-2 rounded-lg flex items-center gap-2 transition-all cursor-pointer ${
                 activeTab === 'machine'
@@ -900,7 +1104,7 @@ export const RepLookupModal: React.FC<RepLookupModalProps> = ({
               {searchQuery && (
                 <button
                   type="button"
-                  onClick={() => setSearchQuery('')}
+                  onClick={() => setSearchQueryInstant('')}
                   className="absolute left-8 top-1/2 -translate-y-1/2 w-5 h-5 rounded-full bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white flex items-center justify-center text-xs transition cursor-pointer"
                   title="مسح البحث"
                 >
@@ -914,20 +1118,20 @@ export const RepLookupModal: React.FC<RepLookupModalProps> = ({
               {activeTab === 'rep' ? (
                 <select
                   value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
+                  onChange={(e) => setSearchQueryInstant(e.target.value)}
                   className="w-full bg-[#050811] border border-slate-700/80 rounded-xl px-3 py-2.5 text-xs text-blue-400 font-bold focus:outline-none focus:border-blue-500 transition cursor-pointer shadow-inner truncate"
                 >
                   <option value="">-- اختر مندوب من القائمة ({uniqueReps.length}) --</option>
                   {filteredDropdownReps.map((r, rIdx) => (
                     <option key={`${r.account}-${rIdx}`} value={r.account !== 'غير متوفر' ? r.account : r.name}>
-                      {r.name} {r.account !== 'غير متوفر' ? `(حساب: ${r.account})` : ''} • [{r.machineCount} ماكينة]
+                      {r.name} {r.account !== 'غير متوفر' ? `(حساب: ${r.account})` : ''} • [{r.machineCount} ماكينة]{r.duplicatedMachinesCount > 0 ? ` • [🔁 ${r.duplicatedMachinesCount} مكررة]` : ''}
                     </option>
                   ))}
                 </select>
               ) : (
                 <select
                   value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
+                  onChange={(e) => setSearchQueryInstant(e.target.value)}
                   className="w-full bg-[#050811] border border-slate-700/80 rounded-xl px-3 py-2.5 text-xs text-indigo-400 font-bold focus:outline-none focus:border-indigo-500 transition cursor-pointer shadow-inner truncate"
                 >
                   <option value="">-- اختر ماكينة من القائمة ({uniqueMachines.length}) --</option>
@@ -957,7 +1161,7 @@ export const RepLookupModal: React.FC<RepLookupModalProps> = ({
                   return (
                     <button
                       key={`${r.account}-${rIdx}`}
-                      onClick={() => setSearchQuery(r.account !== 'غير متوفر' ? r.account : r.name)}
+                      onClick={() => setSearchQueryInstant(r.account !== 'غير متوفر' ? r.account : r.name)}
                       className={`px-3 py-1 rounded-lg shrink-0 transition cursor-pointer flex items-center gap-1.5 font-bold ${
                         isActive
                           ? 'bg-blue-600 text-white border border-blue-500 shadow-md shadow-blue-600/20'
@@ -968,6 +1172,11 @@ export const RepLookupModal: React.FC<RepLookupModalProps> = ({
                         {r.name !== 'لا يوجد مندوب' ? r.name : ''}{' '}
                         {r.account !== 'غير متوفر' ? `(${r.account})` : ''}
                       </span>
+                      {r.duplicatedMachinesCount > 0 && (
+                        <span className="text-[10px] px-1 py-0.2 rounded bg-purple-500/20 text-purple-300 font-mono" title={`يحتوي على ${r.duplicatedMachinesCount} ماكينات مكررة`}>
+                          🔁
+                        </span>
+                      )}
                       {isActive && <CheckCircle2 className="w-3 h-3" />}
                     </button>
                   );
@@ -984,7 +1193,7 @@ export const RepLookupModal: React.FC<RepLookupModalProps> = ({
                   return (
                     <button
                       key={`${m.machine}-${mIdx}`}
-                      onClick={() => setSearchQuery(m.machine)}
+                      onClick={() => setSearchQueryInstant(m.machine)}
                       className={`px-3 py-1 rounded-lg shrink-0 transition cursor-pointer flex items-center gap-1.5 font-bold font-mono ${
                         isActive
                           ? 'bg-indigo-600 text-white border border-indigo-500 shadow-md shadow-indigo-600/20'
@@ -1049,8 +1258,19 @@ export const RepLookupModal: React.FC<RepLookupModalProps> = ({
             </div>
           )}
 
+          {/* SEARCHING LOADER */}
+          {searchQuery.trim() && searchQuery !== debouncedSearchQuery && (
+            <div className="py-16 text-center space-y-4 bg-[#090e1a] rounded-2xl border border-slate-800/80 shadow-inner flex flex-col items-center justify-center animate-in fade-in duration-150">
+              <div className="w-10 h-10 rounded-full border-4 border-blue-500/20 border-t-blue-500 animate-spin"></div>
+              <div className="space-y-1">
+                <h4 className="text-sm font-extrabold text-blue-400">جاري البحث والتحليل فورياً...</h4>
+                <p className="text-[11px] text-slate-400">نعمل على فحص وتدقيق السجلات لتوفير أدق المعلومات بدون تهنيج.</p>
+              </div>
+            </div>
+          )}
+
           {/* STATE B: REP LOOKUP RESULTS */}
-          {searchQuery.trim() && activeTab === 'rep' && (
+          {searchQuery.trim() && searchQuery === debouncedSearchQuery && activeTab === 'rep' && (
             matchedRepData ? (
               <div className="space-y-4 animate-in fade-in duration-200">
                 {/* Rep Profile Card */}
@@ -1069,141 +1289,272 @@ export const RepLookupModal: React.FC<RepLookupModalProps> = ({
                           <span className="font-mono text-xs font-bold px-2.5 py-0.5 rounded-lg bg-blue-950 text-blue-400 border border-blue-500/30">
                             حساب: {matchedRepData.repInfo.account}
                           </span>
+                          {matchedRepData.repInfo.duplicatedForRepCount > 0 && (
+                            <span className="inline-flex items-center gap-1 font-mono text-[11px] font-black px-2.5 py-0.5 rounded-lg bg-purple-950/80 text-purple-300 border border-purple-500/40 shadow-sm animate-pulse">
+                              <Repeat className="w-3.5 h-3.5" />
+                              <span>{matchedRepData.repInfo.duplicatedForRepCount} ماكينات مكررة</span>
+                            </span>
+                          )}
                         </div>
                         <p className="text-xs text-slate-400 mt-1">
-                          بيان تفصيلي بجميع ماكينات هذا المندوب وحالة الاشتراك والتعدد لكل جهاز.
+                          بيان تفصيلي بجميع ماكينات هذا المندوب وحالة الارتباط والتكرار لكل جهاز.
                         </p>
                       </div>
                     </div>
 
                     {/* KPI Pills */}
                     <div className="flex items-center gap-2 flex-wrap w-full md:w-auto justify-end">
-                      <div className="px-3.5 py-2 rounded-xl bg-[#050811] border border-slate-800 text-center min-w-[80px]">
+                      {/* Total Machines & Total Links KPI Button */}
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setRepFilterMode('all');
+                        }}
+                        className={`px-3.5 py-2 rounded-xl text-center min-w-[95px] transition cursor-pointer border ${
+                          repFilterMode === 'all'
+                            ? 'bg-blue-600/20 border-blue-500 text-white shadow-md'
+                            : 'bg-[#050811] border-slate-800 text-slate-300 hover:border-slate-700'
+                        }`}
+                        title="عرض إجمالي كافة الماكينات والارتباطات"
+                      >
                         <span className="text-[10px] text-slate-400 font-bold block">إجمالي الماكينات</span>
-                        <span className="text-base font-mono font-black text-blue-400">
-                          {matchedRepData.repInfo.totalMachines}
+                        <div className="flex items-baseline justify-center gap-1">
+                          <span className="text-base font-mono font-black text-blue-400">
+                            {matchedRepData.repInfo.totalLinksForRep}
+                          </span>
+                          <span className="text-[10px] text-slate-400 font-bold">
+                            ({matchedRepData.repInfo.totalMachines} فريدة)
+                          </span>
+                        </div>
+                      </button>
+
+                      {/* Rep Duplicated Machines KPI Button */}
+                      <button
+                        type="button"
+                        onClick={() => setRepFilterMode(repFilterMode === 'duplicated' ? 'all' : 'duplicated')}
+                        className={`px-3.5 py-2 rounded-xl text-center min-w-[95px] transition cursor-pointer border ${
+                          matchedRepData.repInfo.duplicatedForRepCount > 0
+                            ? repFilterMode === 'duplicated'
+                              ? 'bg-purple-600 text-white border-purple-400 shadow-lg shadow-purple-900/40'
+                              : 'bg-purple-950/40 border-purple-500/50 hover:border-purple-400 text-purple-300 shadow-sm'
+                            : 'bg-[#050811] border-slate-800 text-slate-400'
+                        }`}
+                        title="اضغط لتصفية الماكينات المكررة لنفس المندوب"
+                      >
+                        <span className={`text-[10px] font-bold flex items-center justify-center gap-1 ${
+                          matchedRepData.repInfo.duplicatedForRepCount > 0 ? 'text-purple-300' : 'text-slate-400'
+                        }`}>
+                          <Repeat className="w-3 h-3" />
+                          <span>مكررة للمندوب</span>
                         </span>
-                      </div>
+                        <span className={`text-base font-mono font-black ${
+                          matchedRepData.repInfo.duplicatedForRepCount > 0 ? 'text-purple-200' : 'text-slate-400'
+                        }`}>
+                          {matchedRepData.repInfo.duplicatedForRepCount}
+                        </span>
+                      </button>
 
                       {/* Cash Machines Count Box */}
-                      <div className="px-3.5 py-2 rounded-xl bg-[#050811] border border-emerald-500/40 text-center min-w-[95px] shadow-sm">
+                      <button
+                        type="button"
+                        onClick={() => setRepFilterMode(repFilterMode === 'cash' ? 'all' : 'cash')}
+                        className={`px-3.5 py-2 rounded-xl text-center min-w-[90px] transition cursor-pointer border ${
+                          repFilterMode === 'cash'
+                            ? 'bg-emerald-600 text-white border-emerald-400 shadow-md'
+                            : 'bg-[#050811] border-emerald-500/40 hover:border-emerald-500 text-emerald-400'
+                        }`}
+                        title="اضغط لعرض ماكينات الكاش التي تبدأ بـ 7-"
+                      >
                         <span className="text-[10px] text-emerald-400 font-bold flex items-center justify-center gap-1">
-                          <span>💵 ماكينات الكاش</span>
+                          <span>💵 كاش (7-)</span>
                         </span>
                         <span className="text-base font-mono font-black text-emerald-400">
                           {matchedRepData.repInfo.cashCount}
                         </span>
-                      </div>
+                      </button>
 
                       {/* Payments Machines Count Box */}
-                      <div className="px-3.5 py-2 rounded-xl bg-[#050811] border border-blue-500/40 text-center min-w-[95px] shadow-sm">
+                      <button
+                        type="button"
+                        onClick={() => setRepFilterMode(repFilterMode === 'payment' ? 'all' : 'payment')}
+                        className={`px-3.5 py-2 rounded-xl text-center min-w-[90px] transition cursor-pointer border ${
+                          repFilterMode === 'payment'
+                            ? 'bg-blue-600 text-white border-blue-400 shadow-md'
+                            : 'bg-[#050811] border-blue-500/40 hover:border-blue-500 text-blue-400'
+                        }`}
+                        title="اضغط لعرض ماكينات المدفوعات"
+                      >
                         <span className="text-[10px] text-blue-400 font-bold flex items-center justify-center gap-1">
-                          <span>💳 ماكينات المدفوعات</span>
+                          <span>💳 مدفوعات</span>
                         </span>
                         <span className="text-base font-mono font-black text-blue-400">
                           {matchedRepData.repInfo.paymentsCount}
                         </span>
-                      </div>
+                      </button>
 
-                      <div className="px-3.5 py-2 rounded-xl bg-[#050811] border border-emerald-900/40 text-center min-w-[80px]">
-                        <span className="text-[10px] text-emerald-400 font-bold block">منفردة (خاصة)</span>
-                        <span className="text-base font-mono font-black text-emerald-400">
-                          {matchedRepData.repInfo.soleCount}
-                        </span>
-                      </div>
-                      <div className="px-3.5 py-2 rounded-xl bg-[#050811] border border-amber-900/40 text-center min-w-[80px]">
-                        <span className="text-[10px] text-amber-400 font-bold block">مشتركة (متعددة)</span>
+                      {/* Cash + Payments Both Count Box (if exists) */}
+                      {matchedRepData.repInfo.bothCount > 0 && (
+                        <button
+                          type="button"
+                          onClick={() => setRepFilterMode(repFilterMode === 'both' ? 'all' : 'both')}
+                          className={`px-3.5 py-2 rounded-xl text-center min-w-[90px] transition cursor-pointer border ${
+                            repFilterMode === 'both'
+                              ? 'bg-amber-600 text-white border-amber-400 shadow-md'
+                              : 'bg-[#050811] border-amber-500/40 hover:border-amber-500 text-amber-400'
+                          }`}
+                        >
+                          <span className="text-[10px] text-amber-400 font-bold flex items-center justify-center gap-1">
+                            <span>⭐ كاش + دفع</span>
+                          </span>
+                          <span className="text-base font-mono font-black text-amber-400">
+                            {matchedRepData.repInfo.bothCount}
+                          </span>
+                        </button>
+                      )}
+
+                      <button
+                        type="button"
+                        onClick={() => setRepFilterMode(repFilterMode === 'shared' ? 'all' : 'shared')}
+                        className={`px-3.5 py-2 rounded-xl text-center min-w-[80px] transition cursor-pointer border ${
+                          repFilterMode === 'shared'
+                            ? 'bg-amber-600 text-white border-amber-400 shadow-md'
+                            : 'bg-[#050811] border-amber-900/40 hover:border-amber-700 text-amber-400'
+                        }`}
+                      >
+                        <span className="text-[10px] text-amber-400 font-bold block">مشتركة</span>
                         <span className="text-base font-mono font-black text-amber-400">
                           {matchedRepData.repInfo.sharedCount}
                         </span>
-                      </div>
+                      </button>
                     </div>
                   </div>
+                </div>
 
-                  {/* Financial Statistics Row */}
-                  {(matchedRepData.repInfo.totalPaymentsAmount > 0 || matchedRepData.repInfo.totalCashAmount > 0) && (
-                    <div className="mt-4 pt-3.5 border-t border-slate-800/80 grid grid-cols-1 sm:grid-cols-3 gap-3 text-right">
-                      {/* Cash Sum Card */}
-                      <div className="p-3 rounded-xl bg-emerald-500/5 border border-emerald-500/20 flex items-center justify-between shadow-sm">
-                        <div className="flex items-center gap-2">
-                          <span className="text-lg">💵</span>
-                          <div className="text-right">
-                            <span className="text-[10px] text-emerald-400 font-bold block">إجمالي مبالغ الكاش</span>
-                            <span className="text-[10px] text-slate-400">من واقع شيت الكاش</span>
-                          </div>
-                        </div>
-                        <span className="text-sm sm:text-base font-mono font-black text-emerald-400">
-                          {matchedRepData.repInfo.totalCashAmount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                        </span>
+                {/* DISTINCTIVE ALERT BANNER IF DUPLICATE MACHINES FOUND FOR THIS REP */}
+                {matchedRepData.repInfo.duplicatedForRepCount > 0 && (
+                  <div className="p-3.5 rounded-2xl bg-gradient-to-r from-purple-950/70 via-indigo-950/40 to-[#0b1222] border border-purple-500/40 shadow-lg flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+                    <div className="flex items-center gap-3">
+                      <div className="w-10 h-10 rounded-xl bg-purple-600/20 text-purple-400 border border-purple-500/40 flex items-center justify-center shrink-0 shadow-inner">
+                        <Repeat className="w-5 h-5 text-purple-300 animate-pulse" />
                       </div>
-
-                      {/* Payments Sum Card */}
-                      <div className="p-3 rounded-xl bg-blue-500/5 border border-blue-500/20 flex items-center justify-between shadow-sm">
-                        <div className="flex items-center gap-2">
-                          <span className="text-lg">💳</span>
-                          <div className="text-right">
-                            <span className="text-[10px] text-blue-400 font-bold block">إجمالي مبالغ المدفوعات</span>
-                            <span className="text-[10px] text-slate-400">من واقع شيت المدفوعات</span>
-                          </div>
+                      <div>
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="text-xs font-black text-purple-200">
+                            ⚠️ تنبيه: تم رصد ماكينات مربوطة بنفس المندوب أكثر من مرة!
+                          </span>
+                          <span className="px-2.5 py-0.5 rounded-full text-[10px] font-mono font-black bg-purple-500/20 text-purple-300 border border-purple-500/30">
+                            {matchedRepData.repInfo.duplicatedForRepCount} ماكينة مكررة ({matchedRepData.repInfo.totalLinksForRep} إجمالي ارتباط)
+                          </span>
                         </div>
-                        <span className="text-sm sm:text-base font-mono font-black text-blue-400">
-                          {matchedRepData.repInfo.totalPaymentsAmount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                        </span>
-                      </div>
-
-                      {/* Combined Sum Card */}
-                      <div className="p-3 rounded-xl bg-indigo-500/10 border border-indigo-500/20 flex items-center justify-between shadow-sm">
-                        <div className="flex items-center gap-2">
-                          <span className="text-lg">💰</span>
-                          <div className="text-right">
-                            <span className="text-[10px] text-indigo-400 font-bold block">إجمالي المبالغ بالكامل</span>
-                            <span className="text-[10px] text-slate-400">كاش + مدفوعات مندوب</span>
-                          </div>
-                        </div>
-                        <span className="text-sm sm:text-base font-mono font-black text-white">
-                          {matchedRepData.repInfo.totalOverallAmount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                        </span>
+                        <p className="text-[11px] text-slate-300 mt-0.5">
+                          تظهر هذه الماكينات بعلامة مميزة <span className="text-purple-300 font-bold">🔁</span> ومظللة باللون البنفسجي، ومسندة لهذا المندوب أكثر من مرة (بين الكاش والمدفوعات أو تكرار داخل نفس الشيت).
+                        </p>
                       </div>
                     </div>
-                  )}
-                </div>
+
+                    <button
+                      type="button"
+                      onClick={() => setRepFilterMode(repFilterMode === 'duplicated' ? 'all' : 'duplicated')}
+                      className={`px-3.5 py-2 rounded-xl text-xs font-bold transition cursor-pointer flex items-center gap-1.5 shrink-0 shadow-md ${
+                        repFilterMode === 'duplicated'
+                          ? 'bg-purple-600 hover:bg-purple-500 text-white shadow-purple-600/30'
+                          : 'bg-purple-950 hover:bg-purple-900 text-purple-200 border border-purple-500/40'
+                      }`}
+                    >
+                      <Repeat className="w-3.5 h-3.5" />
+                      <span>{repFilterMode === 'duplicated' ? 'عرض كافة الماكينات' : 'تصفية الماكينات المكررة فقط 🔁'}</span>
+                    </button>
+                  </div>
+                )}
 
                 {/* Machines Section for this Rep */}
                 <div className="space-y-3">
                   <div className="p-3 bg-[#060a14] border border-slate-800 rounded-2xl flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                    <div className="flex items-center gap-2">
-                      <Layers className="w-4 h-4 text-blue-400" />
-                      <span className="text-xs font-bold text-white">
-                        قائمة الماكينات المربوطة ({matchedRepData.machines.length})
-                      </span>
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <div className="flex items-center gap-2">
+                        <Layers className="w-4 h-4 text-blue-400" />
+                        <span className="text-xs font-bold text-white">
+                          {repListDisplayMode === 'occurrences'
+                            ? `الأسطر والارتباطات المعروضة (${filteredRepOccurrences.length} من ${matchedRepData.allOccurrences.length})`
+                            : `الماكينات المعروضة (${filteredRepMachines.length} من ${matchedRepData.machines.length})`}
+                        </span>
+                      </div>
+
+                      {/* Active Filter Badge */}
+                      {repFilterMode !== 'all' && (
+                        <div className="flex items-center gap-1.5">
+                          <span className="text-[10px] font-bold px-2 py-0.5 rounded-lg bg-blue-500/10 text-blue-400 border border-blue-500/20">
+                            تصفية: {
+                              repFilterMode === 'duplicated' ? '🔁 المكررة للمندوب' :
+                              repFilterMode === 'cash' ? '💵 الكاش فقط (7-)' :
+                              repFilterMode === 'payment' ? '💳 المدفوعات فقط' :
+                              repFilterMode === 'both' ? '⭐ كاش ومدفوعات معاً' :
+                              '👥 المشتركة مع آخرين'
+                            }
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => setRepFilterMode('all')}
+                            className="text-[10px] text-slate-400 hover:text-white underline cursor-pointer"
+                          >
+                            (إلغاء التصفية)
+                          </button>
+                        </div>
+                      )}
                     </div>
 
                     <div className="flex items-center gap-2.5 flex-wrap">
+                      {/* Representation Format Toggle: Sequential Rows (Occurrences) vs Grouped Summary */}
+                      <div className="inline-flex rounded-xl p-1 bg-[#050811] border border-slate-800 text-xs font-bold shrink-0">
+                        <button
+                          onClick={() => setRepListDisplayMode('occurrences')}
+                          className={`px-3 py-1 rounded-lg flex items-center gap-1.5 transition-all cursor-pointer ${
+                            repListDisplayMode === 'occurrences'
+                              ? 'bg-indigo-600 text-white shadow-sm'
+                              : 'text-slate-400 hover:text-white'
+                          }`}
+                          title="عرض كافة الأسطر تحت بعضها حتى لو تكررت الماكينة 4 مرات كما في الإكسل"
+                        >
+                          <span>📋 كافة الأسطر بالتفصيل ({matchedRepData.allOccurrences.length})</span>
+                        </button>
+                        <button
+                          onClick={() => setRepListDisplayMode('summary')}
+                          className={`px-3 py-1 rounded-lg flex items-center gap-1.5 transition-all cursor-pointer ${
+                            repListDisplayMode === 'summary'
+                              ? 'bg-blue-600 text-white shadow-sm'
+                              : 'text-slate-400 hover:text-white'
+                          }`}
+                          title="عرض ملخص الماكينات المجمعة الفريدة"
+                        >
+                          <span>📦 ملخص الأجهزة الفريدة ({matchedRepData.machines.length})</span>
+                        </button>
+                      </div>
+
                       {/* View Switcher Capsule (Table vs Cards) */}
                       <div className="inline-flex rounded-xl p-1 bg-[#050811] border border-slate-800 text-xs font-bold shrink-0">
                         <button
                           onClick={() => setLookupViewMode('cards')}
-                          className={`px-3 py-1 rounded-lg flex items-center gap-1.5 transition-all cursor-pointer ${
+                          className={`px-2.5 py-1 rounded-lg flex items-center gap-1 transition-all cursor-pointer ${
                             lookupViewMode === 'cards'
-                              ? 'bg-blue-600 text-white shadow-sm'
+                              ? 'bg-slate-700 text-white shadow-sm'
                               : 'text-slate-400 hover:text-white'
                           }`}
                           title="عرض البطاقات والبوكسات"
                         >
                           <Layers className="w-3.5 h-3.5" />
-                          <span>عرض البطاقات</span>
+                          <span>بطاقات</span>
                         </button>
                         <button
                           onClick={() => setLookupViewMode('table')}
-                          className={`px-3 py-1 rounded-lg flex items-center gap-1.5 transition-all cursor-pointer ${
+                          className={`px-2.5 py-1 rounded-lg flex items-center gap-1 transition-all cursor-pointer ${
                             lookupViewMode === 'table'
-                              ? 'bg-blue-600 text-white shadow-sm'
+                              ? 'bg-slate-700 text-white shadow-sm'
                               : 'text-slate-400 hover:text-white'
                           }`}
                           title="عرض جدول البيانات التفصيلي"
                         >
                           <TableProperties className="w-3.5 h-3.5" />
-                          <span>عرض الجدول</span>
+                          <span>جدول</span>
                         </button>
                       </div>
 
@@ -1211,6 +1562,7 @@ export const RepLookupModal: React.FC<RepLookupModalProps> = ({
                       <button
                         onClick={exportRepStatement}
                         className="px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold flex items-center gap-1.5 transition cursor-pointer shadow-md"
+                        title="تصدير شيت الإكسل الشامل (الأسطر المكررة + ملخص الأجهزة)"
                       >
                         <FileSpreadsheet className="w-3.5 h-3.5" />
                         <span>تصدير بيان المندوب Excel</span>
@@ -1225,33 +1577,181 @@ export const RepLookupModal: React.FC<RepLookupModalProps> = ({
                         <thead className="bg-[#050811] text-slate-400 font-bold sticky top-0 border-b border-slate-800 z-10">
                           <tr>
                             <th className="p-3 w-12 text-center font-mono">م</th>
-                            <th className="p-3 w-40 font-mono">رقم الماكينة</th>
+                            <th className="p-3 w-36 font-mono">رقم الماكينة</th>
                             <th className="p-3 w-32 text-center">نوع الحساب</th>
-                            <th className="p-3 w-40 text-center">حالة الملكية والتعدد</th>
+                            {repListDisplayMode === 'occurrences' ? (
+                              <>
+                                <th className="p-3 w-40 text-center">ترتيب السجل للمندوب</th>
+                                <th className="p-3 w-40 text-center">إجمالي تكرار الماكينة</th>
+                              </>
+                            ) : (
+                              <th className="p-3 w-48 text-center">تكرار الربط للمندوب</th>
+                            )}
+                            <th className="p-3 w-36 text-center">حالة الملكية والتعدد</th>
                             <th className="p-3">المناديب المشاركون على الماكينة</th>
-                            <th className="p-3 w-28 text-center">إجراء</th>
+                            <th className="p-3 w-24 text-center">إجراء</th>
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-slate-800/80 font-mono text-slate-200">
-                          {matchedRepData.machines.map((m, idx) => (
-                            <tr key={`${m.machine}-${idx}`} className="hover:bg-slate-800/50 transition-colors">
-                              <td className="p-3 text-center text-slate-500 font-bold">{idx + 1}</td>
-                              <td className="p-3 font-bold text-white text-sm tracking-wide">
-                                {m.machine}
-                              </td>
-                              <td className="p-3 text-center font-bold">
-                                {m.type === 'cash' ? (
-                                  <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-black bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
-                                    💵 كاش
+                          {repListDisplayMode === 'occurrences' ? (
+                            /* ALL OCCURRENCES SEQUENTIAL ROWS (Matches User Screenshot) */
+                            filteredRepOccurrences.slice(0, visibleMachinesLimit).map((occ, idx) => (
+                              <tr
+                                key={occ.id || `${occ.machine}-${idx}`}
+                                className={`transition-colors ${
+                                  occ.isRepeatedForSameRep
+                                    ? 'bg-purple-950/20 hover:bg-purple-950/35 border-r-4 border-r-purple-500'
+                                    : 'hover:bg-slate-800/50'
+                                }`}
+                              >
+                                <td className="p-3 text-center text-slate-500 font-bold">{idx + 1}</td>
+                                <td className="p-3 font-bold text-sm tracking-wide">
+                                  <div className="flex items-center gap-1.5">
+                                    <span className={occ.type === 'cash' ? 'text-emerald-400 font-black' : 'text-white'}>
+                                      {occ.machine}
+                                    </span>
+                                    {occ.isRepeatedForSameRep && (
+                                      <span className="text-[10px] px-1 py-0.2 rounded bg-purple-500/20 text-purple-300 font-mono" title={`سجل ${occ.occurrenceIndex} من ${occ.totalForMachine}`}>
+                                        🔁 {occ.occurrenceIndex}/{occ.totalForMachine}
+                                      </span>
+                                    )}
+                                  </div>
+                                </td>
+                                <td className="p-3 text-center font-bold">
+                                  {occ.type === 'cash' ? (
+                                    <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-black bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+                                      💵 كاش (7-)
+                                    </span>
+                                  ) : (
+                                    <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-black bg-blue-500/10 text-blue-400 border border-blue-500/20">
+                                      💳 مدفوعات
+                                    </span>
+                                  )}
+                                </td>
+                                <td className="p-3 text-center">
+                                  <span className={`inline-block px-2.5 py-0.5 rounded-lg text-[10px] font-black font-sans border ${
+                                    occ.isRepeatedForSameRep
+                                      ? 'bg-purple-950/80 text-purple-300 border-purple-500/40'
+                                      : 'bg-slate-800 text-slate-400 border-slate-700'
+                                  }`}>
+                                    سجل {occ.occurrenceIndex} من {occ.totalForMachine}
                                   </span>
-                                ) : (
-                                  <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-black bg-blue-500/10 text-blue-400 border border-blue-500/20">
-                                    💳 مدفوعات
+                                </td>
+                                <td className="p-3 text-center">
+                                  {occ.isRepeatedForSameRep ? (
+                                    <span className="text-purple-300 text-[10px] font-black font-sans">
+                                      مكررة ({occ.totalForMachine} مرات)
+                                    </span>
+                                  ) : (
+                                    <span className="text-slate-400 text-[10px] font-sans">
+                                      مرة واحدة
+                                    </span>
+                                  )}
+                                </td>
+                                <td className="p-3 text-center">
+                                  <span
+                                    className={`inline-block px-2 py-0.5 rounded-lg text-[10px] font-black border ${
+                                      occ.totalRepsOnMachine === 1
+                                        ? 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30'
+                                        : 'bg-amber-500/15 text-amber-400 border-amber-500/30'
+                                    }`}
+                                  >
+                                    {occ.totalRepsOnMachine === 1 ? 'خاصة فقط' : `مشتركة (${occ.totalRepsOnMachine} مناديب)`}
                                   </span>
-                                )}
-                              </td>
-                              <td className="p-3 text-center">
-                                <div className="flex flex-col items-center gap-1">
+                                </td>
+                                <td className="p-3 font-sans">
+                                  {occ.otherReps.length > 0 ? (
+                                    <div className="flex items-center gap-1.5 flex-wrap">
+                                      {occ.otherReps.map((r, rIdx) => (
+                                        <span
+                                          key={rIdx}
+                                          onClick={() => setSearchQueryInstant(r.account !== 'غير متوفر' ? r.account : r.name)}
+                                          className="px-2 py-0.5 rounded-lg bg-[#050811] hover:bg-slate-800 text-slate-300 border border-slate-800 hover:border-blue-500 text-[10px] hover:text-blue-400 cursor-pointer transition font-bold"
+                                          title="اضغط للاستعلام عن هذا المندوب"
+                                        >
+                                          {r.name} {r.account !== 'غير متوفر' ? `(${r.account})` : ''} {r.type === 'cash' ? '💵' : '💳'}
+                                        </span>
+                                      ))}
+                                    </div>
+                                  ) : occ.isRepeatedForSameRep ? (
+                                    <span className="text-purple-300 text-[11px] font-bold">
+                                      مسندة لنفس المندوب ({occ.totalForMachine}) مرات متكررة بدون شركاء آخرين
+                                    </span>
+                                  ) : (
+                                    <span className="text-slate-500 text-[11px]">المندوب هو المالك الوحيد ولا يوجد شركاء</span>
+                                  )}
+                                </td>
+                                <td className="p-3 text-center">
+                                  <button
+                                    onClick={() => {
+                                      setActiveTab('machine');
+                                      setSearchQueryInstant(occ.machine);
+                                    }}
+                                    className="px-2.5 py-1 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-[10px] font-black transition cursor-pointer"
+                                  >
+                                    فحص &larr;
+                                  </button>
+                                </td>
+                              </tr>
+                            ))
+                          ) : (
+                            /* UNIQUE MACHINES SUMMARY ROWS */
+                            filteredRepMachines.slice(0, visibleMachinesLimit).map((m, idx) => (
+                              <tr
+                                key={`${m.machine}-${idx}`}
+                                className={`transition-colors ${
+                                  m.isRepeatedForSameRep
+                                    ? 'bg-purple-950/20 hover:bg-purple-950/35 border-r-4 border-r-purple-500'
+                                    : 'hover:bg-slate-800/50'
+                                }`}
+                              >
+                                <td className="p-3 text-center text-slate-500 font-bold">{idx + 1}</td>
+                                <td className="p-3 font-bold text-white text-sm tracking-wide">
+                                  <div className="flex items-center gap-1.5">
+                                    <span className={m.type === 'cash' ? 'text-emerald-400 font-black' : 'text-white'}>
+                                      {m.machine}
+                                    </span>
+                                    {m.isRepeatedForSameRep && (
+                                      <span className="text-[10px] px-1 py-0.2 rounded bg-purple-500/20 text-purple-300 font-mono" title="ماكينة مكررة لنفس المندوب">
+                                        🔁
+                                      </span>
+                                    )}
+                                  </div>
+                                </td>
+                                <td className="p-3 text-center font-bold">
+                                  {m.type === 'both' ? (
+                                    <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-black bg-amber-500/15 text-amber-300 border border-amber-500/30">
+                                      ⭐ كاش + دفع ({m.cashCount}💵+{m.paymentCount}💳)
+                                    </span>
+                                  ) : m.type === 'cash' ? (
+                                    <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-black bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+                                      💵 كاش (7-) {m.cashCount > 1 ? `(${m.cashCount}×)` : ''}
+                                    </span>
+                                  ) : (
+                                    <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-black bg-blue-500/10 text-blue-400 border border-blue-500/20">
+                                      💳 مدفوعات {m.paymentCount > 1 ? `(${m.paymentCount}×)` : ''}
+                                    </span>
+                                  )}
+                                </td>
+                                {/* Repetition for Same Rep Column */}
+                                <td className="p-3 text-center">
+                                  {m.isRepeatedForSameRep ? (
+                                    <div className="flex flex-col items-center gap-1">
+                                      <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-lg text-[10px] font-black bg-purple-500/20 text-purple-300 border border-purple-500/40 shadow-sm animate-pulse">
+                                        <Repeat className="w-3 h-3" />
+                                        <span>مكررة للمندوب ({m.sameRepOccurrences} مرات)</span>
+                                      </span>
+                                      <span className="text-[9px] text-purple-300 font-sans font-medium">
+                                        {m.repeatDescription}
+                                      </span>
+                                    </div>
+                                  ) : (
+                                    <span className="inline-block px-2 py-0.5 rounded-lg text-[10px] font-bold bg-slate-800 text-slate-400 border border-slate-700">
+                                      مرة واحدة (منفرد)
+                                    </span>
+                                  )}
+                                </td>
+                                <td className="p-3 text-center">
                                   <span
                                     className={`inline-block px-2 py-0.5 rounded-lg text-[10px] font-black border ${
                                       m.totalRepsOnMachine === 1
@@ -1259,131 +1759,294 @@ export const RepLookupModal: React.FC<RepLookupModalProps> = ({
                                         : 'bg-amber-500/15 text-amber-400 border-amber-500/30'
                                     }`}
                                   >
-                                    {m.totalRepsOnMachine === 1 ? 'خاصة بالمندوب' : `مشتركة (${m.totalRepsOnMachine} مناديب)`}
+                                    {m.totalRepsOnMachine === 1 ? 'خاصة فقط' : `مشتركة (${m.totalRepsOnMachine} مناديب)`}
                                   </span>
-                                  {m.sameRepOccurrences > 1 && (
-                                    <span className="inline-block px-1.5 py-0.5 rounded-md text-[9px] font-black bg-purple-500/15 text-purple-400 border border-purple-500/30">
-                                      🔁 مكرر للمندوب ({m.sameRepOccurrences} مرات)
+                                </td>
+                                <td className="p-3 font-sans">
+                                  {m.otherReps.length > 0 ? (
+                                    <div className="flex items-center gap-1.5 flex-wrap">
+                                      {m.otherReps.map((r, rIdx) => (
+                                        <span
+                                          key={rIdx}
+                                          onClick={() => setSearchQueryInstant(r.account !== 'غير متوفر' ? r.account : r.name)}
+                                          className="px-2 py-0.5 rounded-lg bg-[#050811] hover:bg-slate-800 text-slate-300 border border-slate-800 hover:border-blue-500 text-[10px] hover:text-blue-400 cursor-pointer transition font-bold"
+                                          title="اضغط للاستعلام عن هذا المندوب"
+                                        >
+                                          {r.name} {r.account !== 'غير متوفر' ? `(${r.account})` : ''} {r.type === 'cash' ? '💵' : '💳'}
+                                        </span>
+                                      ))}
+                                    </div>
+                                  ) : m.isRepeatedForSameRep ? (
+                                    <span className="text-purple-300 text-[11px] font-bold">
+                                      الماكينة مسندة لنفس المندوب ({m.sameRepOccurrences}) مرات متكررة بدون شركاء آخرين
                                     </span>
+                                  ) : (
+                                    <span className="text-slate-500 text-[11px]">المندوب هو المالك الوحيد ولا يوجد شركاء</span>
                                   )}
-                                </div>
-                              </td>
-                              <td className="p-3 font-sans">
-                                {m.otherReps.length > 0 ? (
-                                  <div className="flex items-center gap-1.5 flex-wrap">
-                                    {m.otherReps.map((r, rIdx) => (
-                                      <span
-                                        key={rIdx}
-                                        onClick={() => setSearchQuery(r.account !== 'غير متوفر' ? r.account : r.name)}
-                                        className="px-2 py-0.5 rounded-lg bg-[#050811] hover:bg-slate-800 text-slate-300 border border-slate-800 hover:border-blue-500 text-[10px] hover:text-blue-400 cursor-pointer transition font-bold"
-                                        title="اضغط للاستعلام عن هذا المندوب"
-                                      >
-                                        {r.name} {r.account !== 'غير متوفر' ? `(${r.account})` : ''} {r.type === 'cash' ? '💵' : '💳'}
-                                      </span>
-                                    ))}
-                                  </div>
-                                ) : m.sameRepOccurrences > 1 ? (
-                                  <span className="text-purple-400 text-[11px] font-bold">
-                                    الماكينة مسندة لنفس المندوب ({m.sameRepOccurrences}) مرات متكررة بدون شركاء آخرين
-                                  </span>
-                                ) : (
-                                  <span className="text-slate-500 text-[11px]">المندوب هو المالك الوحيد ولا يوجد شركاء</span>
-                                )}
-                              </td>
-                              <td className="p-3 text-center">
-                                <button
-                                  onClick={() => {
-                                    setActiveTab('machine');
-                                    setSearchQuery(m.machine);
-                                  }}
-                                  className="px-2.5 py-1 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-[10px] font-black transition cursor-pointer"
-                                >
-                                  فحص &larr;
-                                </button>
-                              </td>
-                            </tr>
-                          ))}
+                                </td>
+                                <td className="p-3 text-center">
+                                  <button
+                                    onClick={() => {
+                                      setActiveTab('machine');
+                                      setSearchQueryInstant(m.machine);
+                                    }}
+                                    className="px-2.5 py-1 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-[10px] font-black transition cursor-pointer"
+                                  >
+                                    فحص &larr;
+                                  </button>
+                                </td>
+                              </tr>
+                            ))
+                          )}
                         </tbody>
                       </table>
+                      {(repListDisplayMode === 'occurrences' ? filteredRepOccurrences.length : filteredRepMachines.length) > visibleMachinesLimit && (
+                        <div className="p-3 text-center bg-[#050811] border-t border-slate-800">
+                          <button
+                            type="button"
+                            onClick={() => setVisibleMachinesLimit((prev) => prev + 100)}
+                            className="px-4 py-2 rounded-xl bg-blue-600/20 hover:bg-blue-600 text-blue-400 hover:text-white border border-blue-500/30 text-xs font-bold transition cursor-pointer"
+                          >
+                            عرض المزيد من السجلات (
+                            {(repListDisplayMode === 'occurrences' ? filteredRepOccurrences.length : filteredRepMachines.length) - visibleMachinesLimit} متبقية من إجمالي{' '}
+                            {repListDisplayMode === 'occurrences' ? filteredRepOccurrences.length : filteredRepMachines.length}
+                            )
+                          </button>
+                        </div>
+                      )}
                     </div>
                   ) : (
                     /* Grid of Cards */
                     <div className="overflow-y-auto max-h-[45vh] pr-1">
                       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-                        {matchedRepData.machines.map((m, idx) => (
-                          <div
-                            key={`${m.machine}-${idx}`}
-                            className="bg-[#0b1222] border border-slate-800 rounded-2xl p-4 flex flex-col justify-between gap-3 shadow-md hover:border-blue-500/50 transition-all"
-                          >
-                            {/* Card Header */}
-                            <div className="flex items-center justify-between border-b border-slate-800 pb-2">
-                              <div className="flex items-center gap-2">
-                                <span className="text-slate-500 font-mono text-[11px] font-bold">#{idx + 1}</span>
-                                <span className="font-mono font-black text-white text-sm tracking-wide">{m.machine}</span>
+                        {repListDisplayMode === 'occurrences' ? (
+                          /* Occurrences Cards */
+                          filteredRepOccurrences.slice(0, visibleMachinesLimit).map((occ, idx) => (
+                            <div
+                              key={occ.id || `${occ.machine}-${idx}`}
+                              className={`border rounded-2xl p-4 flex flex-col justify-between gap-3 shadow-md transition-all ${
+                                occ.isRepeatedForSameRep
+                                  ? 'bg-gradient-to-b from-[#18132e] to-[#0b1222] border-purple-500/50 shadow-purple-950/40 hover:border-purple-400'
+                                  : 'bg-[#0b1222] border-slate-800 hover:border-blue-500/50'
+                              }`}
+                            >
+                              {/* Card Header */}
+                              <div className="flex items-center justify-between border-b border-slate-800 pb-2">
+                                <div className="flex items-center gap-2">
+                                  <span className="text-slate-500 font-mono text-[11px] font-bold">#{idx + 1}</span>
+                                  <span className={`font-mono font-black text-sm tracking-wide ${occ.type === 'cash' ? 'text-emerald-400' : 'text-white'}`}>
+                                    {occ.machine}
+                                  </span>
+                                </div>
+                                <div className="flex flex-col items-end gap-1">
+                                  <span
+                                    className={`px-2 py-0.5 rounded-lg text-[10px] font-black border ${
+                                      occ.totalRepsOnMachine === 1
+                                        ? 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30'
+                                        : 'bg-amber-500/15 text-amber-400 border-amber-500/30'
+                                    }`}
+                                  >
+                                    {occ.totalRepsOnMachine === 1 ? 'خاصة بالمندوب' : `مشتركة (${occ.totalRepsOnMachine} مناديب)`}
+                                  </span>
+                                </div>
                               </div>
-                              <div className="flex flex-col items-end gap-1">
-                                <span
-                                  className={`px-2 py-0.5 rounded-lg text-[10px] font-black border ${
-                                    m.totalRepsOnMachine === 1
-                                      ? 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30'
-                                      : 'bg-amber-500/15 text-amber-400 border-amber-500/30'
-                                  }`}
-                                >
-                                  {m.totalRepsOnMachine === 1 ? 'خاصة بالمندوب' : `مشتركة (${m.totalRepsOnMachine} مناديب)`}
-                                </span>
-                                {m.sameRepOccurrences > 1 && (
-                                  <span className="px-1.5 py-0.5 rounded-md text-[9px] font-black bg-purple-500/15 text-purple-400 border border-purple-500/30">
-                                    🔁 مكرر ({m.sameRepOccurrences} مرات)
+
+                              {/* Repetition and Type Badges */}
+                              <div className="flex items-center gap-1.5 flex-wrap">
+                                {occ.isRepeatedForSameRep ? (
+                                  <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-lg text-[10px] font-black bg-purple-500/20 text-purple-300 border border-purple-500/40 shadow-sm animate-pulse">
+                                    <Repeat className="w-3 h-3" />
+                                    <span>سجل {occ.occurrenceIndex} من {occ.totalForMachine}</span>
+                                  </span>
+                                ) : (
+                                  <span className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-slate-800 text-slate-400 border border-slate-700">
+                                    سجل مفرد
+                                  </span>
+                                )}
+
+                                {occ.type === 'cash' ? (
+                                  <span className="px-2 py-0.5 rounded-md text-[10px] font-black bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+                                    💵 كاش (7-)
+                                  </span>
+                                ) : (
+                                  <span className="px-2 py-0.5 rounded-md text-[10px] font-black bg-blue-500/10 text-blue-400 border border-blue-500/20">
+                                    💳 مدفوعات
                                   </span>
                                 )}
                               </div>
-                            </div>
 
-                            {/* Card Content - Partners */}
-                            <div className="space-y-1.5">
-                              <span className="text-[10px] text-slate-400 font-bold block">
-                                {m.totalRepsOnMachine === 1 ? 'الملكية والشركاء:' : 'المناديب المشاركون:'}
-                              </span>
-                              {m.otherReps.length > 0 ? (
-                                <div className="flex items-center gap-1.5 flex-wrap">
-                                  {m.otherReps.map((r, rIdx) => (
-                                    <span
-                                      key={rIdx}
-                                      onClick={() => setSearchQuery(r.account !== 'غير متوفر' ? r.account : r.name)}
-                                      className="px-2 py-0.5 rounded-lg bg-[#050811] hover:bg-slate-800 text-slate-300 border border-slate-800 hover:border-blue-500 text-[10px] hover:text-blue-400 cursor-pointer transition font-bold"
-                                      title="اضغط للاستعلام عن هذا المندوب"
-                                    >
-                                      {r.name} {r.account !== 'غير متوفر' ? `(${r.account})` : ''} {r.type === 'cash' ? '💵 كاش' : '💳 دفع'}
-                                    </span>
-                                  ))}
-                                </div>
-                              ) : m.sameRepOccurrences > 1 ? (
-                                <span className="text-purple-400 text-[11px] font-bold">
-                                  مسندة لنفس المندوب ({m.sameRepOccurrences}) مرات متكررة
+                              {/* Card Content - Partners */}
+                              <div className="space-y-1.5">
+                                <span className="text-[10px] text-slate-400 font-bold block">
+                                  {occ.totalRepsOnMachine === 1 ? 'الملكية والشركاء:' : 'المناديب المشاركون:'}
                                 </span>
-                              ) : (
-                                <span className="text-slate-500 text-[11px]">المندوب هو المالك الوحيد ولا يوجد شركاء</span>
-                              )}
-                            </div>
+                                {occ.otherReps.length > 0 ? (
+                                  <div className="flex items-center gap-1.5 flex-wrap">
+                                    {occ.otherReps.map((r, rIdx) => (
+                                      <span
+                                        key={rIdx}
+                                        onClick={() => setSearchQueryInstant(r.account !== 'غير متوفر' ? r.account : r.name)}
+                                        className="px-2 py-0.5 rounded-lg bg-[#050811] hover:bg-slate-800 text-slate-300 border border-slate-800 hover:border-blue-500 text-[10px] hover:text-blue-400 cursor-pointer transition font-bold"
+                                        title="اضغط للاستعلام عن هذا المندوب"
+                                      >
+                                        {r.name} {r.account !== 'غير متوفر' ? `(${r.account})` : ''} {r.type === 'cash' ? '💵 كاش' : '💳 دفع'}
+                                      </span>
+                                    ))}
+                                  </div>
+                                ) : occ.isRepeatedForSameRep ? (
+                                  <span className="text-purple-300 text-[11px] font-bold">
+                                    مسندة لنفس المندوب ({occ.totalForMachine}) مرات متكررة
+                                  </span>
+                                ) : (
+                                  <span className="text-slate-500 text-[11px]">المندوب هو المالك الوحيد ولا يوجد شركاء</span>
+                                )}
+                              </div>
 
-                            {/* Card Footer Actions */}
-                            <div className="pt-2 border-t border-slate-800 flex items-center justify-between">
-                              <span className="text-[10px] text-slate-500 font-mono font-bold">
-                                {m.totalRepsOnMachine === 1 ? '1 مندوب' : `${m.totalRepsOnMachine} مناديب`}
-                              </span>
-                              <button
-                                onClick={() => {
-                                  setActiveTab('machine');
-                                  setSearchQuery(m.machine);
-                                }}
-                                className="px-2.5 py-1 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-[10px] font-black transition cursor-pointer"
-                              >
-                                فحص الماكينة &larr;
-                              </button>
+                              {/* Card Footer Actions */}
+                              <div className="pt-2 border-t border-slate-800 flex items-center justify-between">
+                                <span className="text-[10px] text-slate-500 font-mono font-bold">
+                                  {occ.totalRepsOnMachine === 1 ? '1 مندوب' : `${occ.totalRepsOnMachine} مناديب`}
+                                </span>
+                                <button
+                                  onClick={() => {
+                                    setActiveTab('machine');
+                                    setSearchQueryInstant(occ.machine);
+                                  }}
+                                  className="px-2.5 py-1 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-[10px] font-black transition cursor-pointer"
+                                >
+                                  فحص الماكينة &larr;
+                                </button>
+                              </div>
                             </div>
-                          </div>
-                        ))}
+                          ))
+                        ) : (
+                          /* Summary Unique Cards */
+                          filteredRepMachines.slice(0, visibleMachinesLimit).map((m, idx) => (
+                            <div
+                              key={`${m.machine}-${idx}`}
+                              className={`border rounded-2xl p-4 flex flex-col justify-between gap-3 shadow-md transition-all ${
+                                m.isRepeatedForSameRep
+                                  ? 'bg-gradient-to-b from-[#18132e] to-[#0b1222] border-purple-500/50 shadow-purple-950/40 hover:border-purple-400'
+                                  : 'bg-[#0b1222] border-slate-800 hover:border-blue-500/50'
+                              }`}
+                            >
+                              {/* Card Header */}
+                              <div className="flex items-center justify-between border-b border-slate-800 pb-2">
+                                <div className="flex items-center gap-2">
+                                  <span className="text-slate-500 font-mono text-[11px] font-bold">#{idx + 1}</span>
+                                  <span className={`font-mono font-black text-sm tracking-wide ${m.type === 'cash' ? 'text-emerald-400' : 'text-white'}`}>
+                                    {m.machine}
+                                  </span>
+                                </div>
+                                <div className="flex flex-col items-end gap-1">
+                                  <span
+                                    className={`px-2 py-0.5 rounded-lg text-[10px] font-black border ${
+                                      m.totalRepsOnMachine === 1
+                                        ? 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30'
+                                        : 'bg-amber-500/15 text-amber-400 border-amber-500/30'
+                                    }`}
+                                  >
+                                    {m.totalRepsOnMachine === 1 ? 'خاصة بالمندوب' : `مشتركة (${m.totalRepsOnMachine} مناديب)`}
+                                  </span>
+                                </div>
+                              </div>
+
+                              {/* Repetition and Type Badges */}
+                              <div className="flex items-center gap-1.5 flex-wrap">
+                                {m.isRepeatedForSameRep ? (
+                                  <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-lg text-[10px] font-black bg-purple-500/20 text-purple-300 border border-purple-500/40 shadow-sm animate-pulse">
+                                    <Repeat className="w-3 h-3" />
+                                    <span>مكررة للمندوب ({m.sameRepOccurrences} مرات)</span>
+                                  </span>
+                                ) : (
+                                  <span className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-slate-800 text-slate-400 border border-slate-700">
+                                    مرة واحدة
+                                  </span>
+                                )}
+
+                                {m.type === 'both' ? (
+                                  <span className="px-2 py-0.5 rounded-md text-[10px] font-black bg-amber-500/15 text-amber-300 border border-amber-500/30">
+                                    ⭐ كاش + دفع
+                                  </span>
+                                ) : m.type === 'cash' ? (
+                                  <span className="px-2 py-0.5 rounded-md text-[10px] font-black bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+                                    💵 كاش (7-)
+                                  </span>
+                                ) : (
+                                  <span className="px-2 py-0.5 rounded-md text-[10px] font-black bg-blue-500/10 text-blue-400 border border-blue-500/20">
+                                    💳 مدفوعات
+                                  </span>
+                                )}
+                              </div>
+
+                              {/* Repetition Description if repeated */}
+                              {m.isRepeatedForSameRep && (
+                                <div className="p-2 rounded-xl bg-purple-950/40 border border-purple-500/20 text-[10px] text-purple-200">
+                                  <span className="font-bold block">تفاصيل التكرار:</span>
+                                  <span>{m.repeatDescription}</span>
+                                </div>
+                              )}
+
+                              {/* Card Content - Partners */}
+                              <div className="space-y-1.5">
+                                <span className="text-[10px] text-slate-400 font-bold block">
+                                  {m.totalRepsOnMachine === 1 ? 'الملكية والشركاء:' : 'المناديب المشاركون:'}
+                                </span>
+                                {m.otherReps.length > 0 ? (
+                                  <div className="flex items-center gap-1.5 flex-wrap">
+                                    {m.otherReps.map((r, rIdx) => (
+                                      <span
+                                        key={rIdx}
+                                        onClick={() => setSearchQueryInstant(r.account !== 'غير متوفر' ? r.account : r.name)}
+                                        className="px-2 py-0.5 rounded-lg bg-[#050811] hover:bg-slate-800 text-slate-300 border border-slate-800 hover:border-blue-500 text-[10px] hover:text-blue-400 cursor-pointer transition font-bold"
+                                        title="اضغط للاستعلام عن هذا المندوب"
+                                      >
+                                        {r.name} {r.account !== 'غير متوفر' ? `(${r.account})` : ''} {r.type === 'cash' ? '💵 كاش' : '💳 دفع'}
+                                      </span>
+                                    ))}
+                                  </div>
+                                ) : m.isRepeatedForSameRep ? (
+                                  <span className="text-purple-300 text-[11px] font-bold">
+                                    مسندة لنفس المندوب ({m.sameRepOccurrences}) مرات متكررة
+                                  </span>
+                                ) : (
+                                  <span className="text-slate-500 text-[11px]">المندوب هو المالك الوحيد ولا يوجد شركاء</span>
+                                )}
+                              </div>
+
+                              {/* Card Footer Actions */}
+                              <div className="pt-2 border-t border-slate-800 flex items-center justify-between">
+                                <span className="text-[10px] text-slate-500 font-mono font-bold">
+                                  {m.totalRepsOnMachine === 1 ? '1 مندوب' : `${m.totalRepsOnMachine} مناديب`}
+                                </span>
+                                <button
+                                  onClick={() => {
+                                    setActiveTab('machine');
+                                    setSearchQueryInstant(m.machine);
+                                  }}
+                                  className="px-2.5 py-1 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-[10px] font-black transition cursor-pointer"
+                                >
+                                  فحص الماكينة &larr;
+                                </button>
+                              </div>
+                            </div>
+                          ))
+                        )}
                       </div>
+                      {(repListDisplayMode === 'occurrences' ? filteredRepOccurrences.length : filteredRepMachines.length) > visibleMachinesLimit && (
+                        <div className="p-3 text-center bg-[#0b1222] border border-slate-800 rounded-2xl mt-3">
+                          <button
+                            type="button"
+                            onClick={() => setVisibleMachinesLimit((prev) => prev + 100)}
+                            className="px-4 py-2 rounded-xl bg-blue-600/20 hover:bg-blue-600 text-blue-400 hover:text-white border border-blue-500/30 text-xs font-bold transition cursor-pointer"
+                          >
+                            عرض المزيد من السجلات (
+                            {(repListDisplayMode === 'occurrences' ? filteredRepOccurrences.length : filteredRepMachines.length) - visibleMachinesLimit} متبقية من إجمالي{' '}
+                            {repListDisplayMode === 'occurrences' ? filteredRepOccurrences.length : filteredRepMachines.length}
+                            )
+                          </button>
+                        </div>
+                      )}
                     </div>
                   )}
                 </div>
@@ -1402,7 +2065,7 @@ export const RepLookupModal: React.FC<RepLookupModalProps> = ({
           )}
 
           {/* STATE C: MACHINE LOOKUP RESULTS */}
-          {searchQuery.trim() && activeTab === 'machine' && (
+          {searchQuery.trim() && searchQuery === debouncedSearchQuery && activeTab === 'machine' && (
             matchedMachineData ? (
               <div className="space-y-4 animate-in fade-in duration-200">
                 {/* Machine Profile Card */}
@@ -1537,7 +2200,7 @@ export const RepLookupModal: React.FC<RepLookupModalProps> = ({
                               <button
                                 onClick={() => {
                                   setActiveTab('rep');
-                                  setSearchQuery(r.account !== 'غير متوفر' ? r.account : r.name);
+                                  setSearchQueryInstant(r.account !== 'غير متوفر' ? r.account : r.name);
                                 }}
                                 className="px-2.5 py-1 rounded-lg bg-blue-600 hover:bg-blue-500 text-white text-[10px] font-black transition cursor-pointer"
                               >
